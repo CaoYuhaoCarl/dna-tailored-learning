@@ -11,3 +11,64 @@ V4 使用 LangGraph `StateGraph` 编排扫描、检索、提问、人工修改�
 ---
 
 Langchain：https://docs.langchain.com/oss/python/langchain/overview
+
+## 项目组合
+Streamlit 作为学生端主入口，Jupyter Notebook 只保留给教师讲解和调试。
+
+决定性的原因是：学生并不学习或修改 Python，而是每个模块只修改一个 Markdown 文件；底层模型调用、检索和 LangGraph 都由教师封装。
+此时 Notebook 最重要的优势，也就是逐单元编写和运行代码，并没有真正被学生使用，反而会带来单元格误删、乱序执行、Kernel 中断和不知道该点哪里的课堂风险。
+
+## 落地形态
+
+不要维护两套 Agent 逻辑。核心逻辑仍然全部放在 src/：
+
+```Plain text
+student/
+├── prompt.md
+├── skill/
+│   └── SKILL.md
+├── knowledge/
+│   └── my_card.md
+├── workflow.md
+└── progress.json
+
+src/
+├── model.py
+├── schemas.py
+├── artifacts.py
+├── agents.py
+├── retrieval.py
+├── workflow.py
+├── reporting.py
+├── progress.py
+└── facade.py
+
+teacher/
+├── lesson_1_demo.ipynb
+└── lesson_2_demo.ipynb
+
+pages/
+├── 1_prompt_and_skill.py
+└── 2_knowledge_and_workflow.py
+
+tests/
+├── fixtures/
+├── unit/
+├── integration/
+└── ui/
+
+app.py
+requirements.txt
+requirements-dev.txt
+build_student_package.py
+start_windows.bat
+start_mac.sh
+```
+
+学生在 Streamlit 中看到真实文件名、Markdown 原文和修改前后差异。点击“保存并运行”后，应用保存真实文件，再调用 src/ 中的稳定接口。这样没有牺牲 Prompt、Skill 和知识库都是工程文件这一教学概念。
+
+两个教师 Notebook 只负责：
+- 直播时逐步解释代码和数据流
+- 展示 V0 到 V4 的实现差异
+- 排障和验证
+- 不进入学生 ZIP 的默认入口
