@@ -82,9 +82,19 @@ V2 启动时只向模型提供 `student/skill/` 下各项 Skill 的 `name` 和 `
 
 当学生明确要求整理或保存时，未知分析字段会标记为“待补充”，不会为了凑齐字段无限追问。
 
-随后 Agent 调用受限的 `save_mistake` 工具，将单道错题真实写入 `student/mistakes/mistake-<内容摘要>.md`。
+如果学生提供 `student/mistakes/inbox/` 内的 Markdown 路径，Agent 会先调用受限的 `load_mistake_file` 工具读取文件。
 
-底层 `src/storage.py` 只允许在 `student/` 下新建 Markdown，并拒绝任意路径和静默覆盖。
+该工具支持绝对路径和相对于 `student/mistakes/inbox/` 的路径，只允许读取 UTF-8 `.md` 普通文件，并限制文件大小为 256 KB。
+
+文件中包含多道错题时，Agent 会逐题整理，并为每道题分别调用一次 `save_mistake`。
+
+随后 Agent 调用受限的 `save_mistake` 工具，将单道错题按学科写入 `student/mistakes/records/<subject>/mistake-<内容摘要>.md`。
+
+每条正式记录都包含 YAML Frontmatter 和学生可读的 Markdown 正文。
+
+Frontmatter 保存稳定 ID、学科、主题、来源和复习状态等机器可读字段，后续检索和复习功能应以这些记录为唯一数据源。
+
+底层 `src/storage.py` 只允许从 `inbox/` 读取批量输入，或在 `records/` 下新建正式记录，并拒绝路径越界、符号链接逃逸和静默覆盖。
 
 Skill 演示 Notebook 位于 `teacher/lesson_2_skill.ipynb`：
 

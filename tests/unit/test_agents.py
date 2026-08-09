@@ -1,3 +1,4 @@
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -261,13 +262,15 @@ def test_invoke_v2_exposes_metadata_and_loads_full_skill_on_demand(
 
     def fake_create_agent(*, model: object, tools: list, system_prompt: str):
         assert model is fake_llm
-        assert len(tools) == 2
+        assert len(tools) == 3
         assert tools[0].name == "load_skill"
-        assert tools[1].name == "save_mistake"
+        assert tools[1].name == "load_mistake_file"
+        assert tools[2].name == "save_mistake"
         assert "sorting-out-mistakes: 用户要求整理错题时使用" in tools[0].description
         assert "sorting-out-mistakes: 用户要求整理错题时使用" in system_prompt
         assert "先收集原题" not in system_prompt
         assert "Skill 加载后，其任务步骤优先于" in system_prompt
+        assert "先调用 load_mistake_file" in system_prompt
         assert "立即调用 save_mistake" in system_prompt
 
         class FakeV2Agent:
@@ -393,7 +396,11 @@ def test_invoke_v2_executes_load_skill_through_langchain_agent(
 
     assert result["error"] is None
     assert result["text"] == "请先发来错题原文，可以吗？"
-    assert model.bound_tool_names == ["load_skill", "save_mistake"]
+    assert model.bound_tool_names == [
+        "load_skill",
+        "load_mistake_file",
+        "save_mistake",
+    ]
     assert [type(message).__name__ for message in model.seen_messages[-1]][-2:] == [
         "AIMessage",
         "ToolMessage",
@@ -402,17 +409,46 @@ def test_invoke_v2_executes_load_skill_through_langchain_agent(
     assert result["tool_calls"][0]["name"] == "load_skill"
 
 
+def test_load_mistake_file_tool_reads_only_markdown_inside_inbox(
+    tmp_path: Path,
+) -> None:
+    mistakes_root = tmp_path / "student" / "mistakes"
+    inbox_path = mistakes_root / "inbox"
+    records_path = mistakes_root / "records" / "english"
+    inbox_path.mkdir(parents=True)
+    records_path.mkdir(parents=True)
+    source_path = inbox_path / "english.md"
+    source_path.write_text(
+        "错题1\n原题：第一题\n\n错题2\n原题：第二题\n",
+        encoding="utf-8",
+    )
+    record_path = records_path / "mistake-existing.md"
+    record_path.write_text("不应作为批量输入读取", encoding="utf-8")
+    load_mistake_file = agents_module._create_load_mistake_file_tool(inbox_path)
+
+    success = load_mistake_file.invoke({"path": str(source_path)})
+    failure = load_mistake_file.invoke({"path": str(record_path)})
+
+    assert "读取成功" in success
+    assert "错题1" in success
+    assert "错题2" in success
+    assert failure.startswith("读取失败：")
+
+
 def test_save_mistake_tool_writes_once_and_returns_relative_path(
     tmp_path: Path,
 ) -> None:
-    student_root = tmp_path / "student"
-    mistakes_path = student_root / "mistakes"
+    records_path = tmp_path / "student" / "mistakes" / "records"
+    inbox_path = tmp_path / "student" / "mistakes" / "inbox"
     save_mistake = agents_module._create_save_mistake_tool(
-        mistakes_path,
-        student_root,
+        records_path,
+        records_path,
+        inbox_path,
     )
     mistake = {
         "subject": "英语",
+        "topic": "Present Perfect",
+        "source": "chat",
         "problem_type": "语法填空",
         "original_question": "I ____ (read) this book three times.",
         "student_answer": "am reading",
@@ -426,31 +462,108 @@ def test_save_mistake_tool_writes_once_and_returns_relative_path(
     first_result = save_mistake.invoke(mistake)
     second_result = save_mistake.invoke(mistake)
 
-    saved_files = list(mistakes_path.glob("mistake-*.md"))
+    saved_files = list((records_path / "english").glob("mistake-*.md"))
     assert len(saved_files) == 1
+    assert saved_files[0].parent.name == "english"
     assert "保存成功" in first_result
     assert saved_files[0].name in first_result
     assert "已经保存" in second_result
     assert saved_files[0].name in second_result
     content = saved_files[0].read_text(encoding="utf-8")
+    assert content.startswith("---\n")
+    assert "schema_version: 1" in content
+    assert f"id: {saved_files[0].stem}" in content
+    assert "subject: english" in content
+    assert "topic: present-perfect" in content
+    assert "status: needs-review" in content
+    assert f'created_at: "{date.today().isoformat()}"' in content
+    assert "review_count: 0" in content
+    assert "next_review_at: null" in content
+    assert 'source: "chat"' in content
     assert "- 学科：英语" in content
     assert "- 题型：语法填空" in content
     assert "- 正确答案：have read" in content
 
 
-def test_save_mistake_tool_reports_failure_outside_student_root(
+def test_save_mistake_tool_rejects_source_outside_inbox(
     tmp_path: Path,
 ) -> None:
-    student_root = tmp_path / "student"
-    outside_path = tmp_path / "outside"
+    records_path = tmp_path / "student" / "mistakes" / "records"
+    inbox_path = tmp_path / "student" / "mistakes" / "inbox"
     save_mistake = agents_module._create_save_mistake_tool(
-        outside_path,
-        student_root,
+        records_path,
+        records_path,
+        inbox_path,
     )
 
     result = save_mistake.invoke(
         {
             "subject": "英语",
+            "topic": "present-perfect",
+            "source": str(tmp_path / "private.md"),
+            "problem_type": "语法填空",
+            "original_question": "测试题",
+            "student_answer": "错误答案",
+            "correct_answer": "待补充",
+            "correct_reasoning": "待补充",
+            "error_reason": "待补充",
+            "knowledge_point": "待补充",
+            "next_reminder": "待补充",
+        }
+    )
+
+    assert result.startswith("保存失败：")
+    assert "source 必须是 chat 或 inbox/ 内的 Markdown 路径" in result
+    assert not records_path.exists()
+
+
+def test_save_mistake_tool_rejects_non_slug_topic(tmp_path: Path) -> None:
+    records_path = tmp_path / "student" / "mistakes" / "records"
+    inbox_path = tmp_path / "student" / "mistakes" / "inbox"
+    save_mistake = agents_module._create_save_mistake_tool(
+        records_path,
+        records_path,
+        inbox_path,
+    )
+
+    result = save_mistake.invoke(
+        {
+            "subject": "英语",
+            "topic": "现在完成时",
+            "source": "chat",
+            "problem_type": "语法填空",
+            "original_question": "测试题",
+            "student_answer": "错误答案",
+            "correct_answer": "待补充",
+            "correct_reasoning": "待补充",
+            "error_reason": "待补充",
+            "knowledge_point": "现在完成时",
+            "next_reminder": "待补充",
+        }
+    )
+
+    assert result.startswith("保存失败：")
+    assert "topic 必须使用英文 kebab-case" in result
+    assert not records_path.exists()
+
+
+def test_save_mistake_tool_reports_failure_outside_records_root(
+    tmp_path: Path,
+) -> None:
+    records_path = tmp_path / "student" / "mistakes" / "records"
+    inbox_path = tmp_path / "student" / "mistakes" / "inbox"
+    outside_path = tmp_path / "outside"
+    save_mistake = agents_module._create_save_mistake_tool(
+        outside_path,
+        records_path,
+        inbox_path,
+    )
+
+    result = save_mistake.invoke(
+        {
+            "subject": "英语",
+            "topic": "present-perfect",
+            "source": "chat",
             "problem_type": "语法填空",
             "original_question": "I ____ (read) this book three times.",
             "student_answer": "am reading",
@@ -466,14 +579,54 @@ def test_save_mistake_tool_reports_failure_outside_student_root(
     assert not outside_path.exists()
 
 
+@pytest.mark.parametrize(
+    ("subject", "directory"),
+    [("英语", "english"), ("English", "english"), ("数学", "math")],
+)
+def test_save_mistake_tool_groups_known_subjects(
+    tmp_path: Path,
+    subject: str,
+    directory: str,
+) -> None:
+    records_path = tmp_path / "student" / "mistakes" / "records"
+    inbox_path = tmp_path / "student" / "mistakes" / "inbox"
+    save_mistake = agents_module._create_save_mistake_tool(
+        records_path,
+        records_path,
+        inbox_path,
+    )
+
+    result = save_mistake.invoke(
+        {
+            "subject": subject,
+            "topic": "general",
+            "source": "chat",
+            "problem_type": "测试",
+            "original_question": f"{subject}题目",
+            "student_answer": "错误答案",
+            "correct_answer": "待补充",
+            "correct_reasoning": "待补充",
+            "error_reason": "待补充",
+            "knowledge_point": "待补充",
+            "next_reminder": "待补充",
+        }
+    )
+
+    assert "保存成功" in result
+    assert len(list((records_path / directory).glob("mistake-*.md"))) == 1
+
+
 def test_invoke_v2_executes_load_then_save_through_langchain_agent(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     student_root = tmp_path / "student"
-    mistakes_path = student_root / "mistakes"
+    inbox_path = student_root / "mistakes" / "inbox"
+    records_path = student_root / "mistakes" / "records"
     mistake = {
         "subject": "英语",
+        "topic": "present-perfect",
+        "source": "chat",
         "problem_type": "语法填空",
         "original_question": "I ____ (read) this book three times.",
         "student_answer": "am reading",
@@ -511,8 +664,8 @@ def test_invoke_v2_executes_load_then_save_through_langchain_agent(
         ]
     )
     monkeypatch.setattr(agents_module, "get_llm", lambda: model)
-    monkeypatch.setattr(agents_module, "MISTAKES_PATH", mistakes_path)
-    monkeypatch.setattr(agents_module, "STUDENT_ROOT", student_root)
+    monkeypatch.setattr(agents_module, "MISTAKES_INBOX_PATH", inbox_path)
+    monkeypatch.setattr(agents_module, "MISTAKES_RECORDS_PATH", records_path)
 
     result = agents_module.invoke_v2(
         "请整理这道错题：I ____ (read) this book three times. 我的答案是 am reading。"
@@ -524,7 +677,121 @@ def test_invoke_v2_executes_load_then_save_through_langchain_agent(
         "load_skill",
         "save_mistake",
     ]
-    assert len(list(mistakes_path.glob("mistake-*.md"))) == 1
+    assert len(list((records_path / "english").glob("mistake-*.md"))) == 1
+
+
+def test_invoke_v2_reads_two_mistakes_and_saves_each_through_langchain_agent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    student_root = tmp_path / "student"
+    inbox_path = student_root / "mistakes" / "inbox"
+    records_path = student_root / "mistakes" / "records"
+    inbox_path.mkdir(parents=True)
+    source_path = inbox_path / "english.md"
+    source_path.write_text(
+        "错题1\n"
+        "类型：语法填空\n"
+        "原题：I ____ (read) this book three times.\n"
+        "我的答案：am reading\n\n"
+        "错题2\n"
+        "类型：语法填空\n"
+        "原题：She ____ (go) to the library yesterday.\n"
+        "我的答案：has gone\n",
+        encoding="utf-8",
+    )
+    first_mistake = {
+        "subject": "英语",
+        "topic": "present-perfect",
+        "source": str(source_path),
+        "problem_type": "语法填空",
+        "original_question": "I ____ (read) this book three times.",
+        "student_answer": "am reading",
+        "correct_answer": "have read",
+        "correct_reasoning": "待补充",
+        "error_reason": "待补充",
+        "knowledge_point": "现在完成时",
+        "next_reminder": "待补充",
+    }
+    second_mistake = {
+        "subject": "英语",
+        "topic": "simple-past",
+        "source": str(source_path),
+        "problem_type": "语法填空",
+        "original_question": "She ____ (go) to the library yesterday.",
+        "student_answer": "has gone",
+        "correct_answer": "went",
+        "correct_reasoning": "待补充",
+        "error_reason": "待补充",
+        "knowledge_point": "一般过去时",
+        "next_reminder": "待补充",
+    }
+    model = ToolCallingFakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "load_skill",
+                        "args": {"skill_name": "sorting-out-mistakes"},
+                        "id": "call-load-skill",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "load_mistake_file",
+                        "args": {"path": str(source_path)},
+                        "id": "call-load-file",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "save_mistake",
+                        "args": first_mistake,
+                        "id": "call-save-1",
+                        "type": "tool_call",
+                    },
+                    {
+                        "name": "save_mistake",
+                        "args": second_mistake,
+                        "id": "call-save-2",
+                        "type": "tool_call",
+                    },
+                ],
+            ),
+            AIMessage(content="已读取 2 道错题并分别保存。"),
+        ]
+    )
+    monkeypatch.setattr(agents_module, "get_llm", lambda: model)
+    monkeypatch.setattr(agents_module, "MISTAKES_INBOX_PATH", inbox_path)
+    monkeypatch.setattr(agents_module, "MISTAKES_RECORDS_PATH", records_path)
+
+    result = agents_module.invoke_v2(f"继续整理 {source_path}")
+
+    assert result["error"] is None
+    assert result["text"] == "已读取 2 道错题并分别保存。"
+    assert [call["name"] for call in result["tool_calls"]] == [
+        "load_skill",
+        "load_mistake_file",
+        "save_mistake",
+        "save_mistake",
+    ]
+    assert len(list((records_path / "english").glob("mistake-*.md"))) == 2
+    saved_contents = [
+        path.read_text(encoding="utf-8")
+        for path in (records_path / "english").glob("mistake-*.md")
+    ]
+    assert all('source: "inbox/english.md"' in content for content in saved_contents)
+    assert any("topic: present-perfect" in content for content in saved_contents)
+    assert any("topic: simple-past" in content for content in saved_contents)
 
 
 def test_invoke_v2_returns_skill_error_before_model_call(

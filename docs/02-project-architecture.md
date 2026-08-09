@@ -6,6 +6,14 @@ V0 直接调用模型。
 
 V1 到 V3 使用 LangChain `create_agent`，并只添加当前阶段需要的工具。
 
+V2 暴露 `load_skill`、`load_mistake_file` 和 `save_mistake` 三个领域工具。
+
+其中 `load_mistake_file` 只能读取 `student/mistakes/inbox/` 内的 Markdown，`save_mistake` 则将每道错题按学科保存为独立记录。
+
+每条正式记录使用 YAML Frontmatter 保存稳定 ID、学科、主题、来源和复习状态，正文继续保存适合学生阅读和语义检索的完整错题内容。
+
+Markdown 文件是错题数据的唯一来源，后续索引或统计文件必须从这些记录自动生成。
+
 V4 使用 LangGraph `StateGraph` 编排扫描、检索、提问、人工修改、复查、练习和报告。
 
 ---
@@ -29,7 +37,11 @@ student/
 │   └── sorting-out-mistakes/
 │       └── SKILL.md
 ├── mistakes/
-│   └── mistake-<内容摘要>.md
+│   ├── inbox/
+│   │   └── <批量错题>.md
+│   └── records/
+│       └── <subject>/
+│           └── mistake-<内容摘要>.md  # YAML 元数据 + Markdown 正文
 ├── knowledge/
 │   └── my_card.md
 ├── workflow.md

@@ -45,6 +45,30 @@ def test_teacher_notebooks_have_no_saved_outputs() -> None:
         assert all(cell["outputs"] == [] for cell in code_cells), notebook_path
 
 
+def test_mistake_inbox_and_normalized_records_are_separated() -> None:
+    mistakes_root = PROJECT_ROOT / "student" / "mistakes"
+    inbox_files = sorted((mistakes_root / "inbox").glob("*.md"))
+    record_files = sorted((mistakes_root / "records").glob("*/*.md"))
+
+    assert not list(mistakes_root.glob("*.md"))
+    assert inbox_files
+    assert record_files
+    assert all(path.name.startswith("mistake-") for path in record_files)
+    for path in record_files:
+        content = path.read_text(encoding="utf-8")
+        assert content.startswith("---\n")
+        assert "schema_version: 1" in content
+        assert f"id: {path.stem}" in content
+        assert f"subject: {path.parent.name}" in content
+        assert "topic: " in content
+        assert "status: needs-review" in content
+        assert "created_at: \"" in content
+        assert "review_count: 0" in content
+        assert "next_review_at: null" in content
+        assert 'source: "inbox/' in content
+        assert "# 错题记录" in content
+
+
 def test_teacher_v1_dialogue_starts_from_live_student_input() -> None:
     notebook_path = PROJECT_ROOT / "teacher" / "lesson_1_demo.ipynb"
     notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
@@ -117,6 +141,7 @@ def test_teacher_v2_dialogue_uses_live_input_and_displays_loaded_skill() -> None
     )
     definition = "".join(definition_cell["source"])
     assert 'call.get("name") == "load_skill"' in definition
+    assert 'call.get("name") == "load_mistake_file"' in definition
     assert 'call.get("name") == "save_mistake"' in definition
     student_inputs = iter(["请帮我整理错题", "/exit"])
     calls = []
@@ -133,6 +158,10 @@ def test_teacher_v2_dialogue_uses_live_input_and_displays_loaded_skill() -> None
                 {
                     "name": "load_skill",
                     "args": {"skill_name": "sorting-out-mistakes"},
+                },
+                {
+                    "name": "load_mistake_file",
+                    "args": {"path": "student/mistakes/inbox/english.md"},
                 },
                 {
                     "name": "save_mistake",
@@ -153,4 +182,5 @@ def test_teacher_v2_dialogue_uses_live_input_and_displays_loaded_skill() -> None
         {"role": "assistant", "content": "错题已经保存。"},
     ]
     assert session["tool_calls"][0]["name"] == "load_skill"
-    assert session["tool_calls"][1]["name"] == "save_mistake"
+    assert session["tool_calls"][1]["name"] == "load_mistake_file"
+    assert session["tool_calls"][2]["name"] == "save_mistake"

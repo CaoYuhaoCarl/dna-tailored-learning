@@ -1,4 +1,4 @@
-"""学生数据目录下可复用的安全 Markdown 写入逻辑。"""
+"""学生数据目录下可复用的安全 Markdown 读写逻辑。"""
 
 from pathlib import Path
 
@@ -6,15 +6,67 @@ from src.artifacts import PROJECT_ROOT
 
 
 STUDENT_ROOT = PROJECT_ROOT / "student"
-MISTAKES_PATH = STUDENT_ROOT / "mistakes"
+MISTAKES_ROOT = STUDENT_ROOT / "mistakes"
+MISTAKES_INBOX_PATH = MISTAKES_ROOT / "inbox"
+MISTAKES_RECORDS_PATH = MISTAKES_ROOT / "records"
+MAX_MARKDOWN_BYTES = 256 * 1024
 
 
 class StorageError(ValueError):
-    """文件内容或写入位置不符合学生数据目录规则。"""
+    """文件内容或读写位置不符合学生数据目录规则。"""
 
 
 class FileAlreadyExistsError(StorageError):
     """目标文件已存在，拒绝静默覆盖。"""
+
+
+def load_markdown(
+    requested_path: str | Path,
+    *,
+    allowed_root: str | Path = MISTAKES_INBOX_PATH,
+    max_bytes: int = MAX_MARKDOWN_BYTES,
+) -> str:
+    """读取允许目录内的 UTF-8 Markdown，拒绝越界路径和超大文件。"""
+
+    clean_path = str(requested_path).strip()
+    if not clean_path:
+        raise StorageError("文件路径为空，无法读取。")
+
+    root_path = Path(allowed_root).resolve()
+    input_path = Path(clean_path)
+    target_path = (
+        input_path.resolve()
+        if input_path.is_absolute()
+        else (root_path / input_path).resolve()
+    )
+    try:
+        target_path.relative_to(root_path)
+    except ValueError as exc:
+        raise StorageError(f"只能读取 {root_path} 目录中的文件。") from exc
+
+    if not target_path.is_file():
+        raise StorageError(f"{target_path} 不是可读取的普通文件。")
+    if target_path.suffix.lower() != ".md":
+        raise StorageError("只能读取 .md 文件。")
+
+    try:
+        with target_path.open("rb") as file:
+            payload = file.read(max_bytes + 1)
+    except OSError as exc:
+        raise StorageError(f"无法读取 {target_path}。请检查文件权限。") from exc
+
+    if len(payload) > max_bytes:
+        raise StorageError(
+            f"文件过大，只能读取不超过 {max_bytes // 1024} KB 的 Markdown。"
+        )
+    try:
+        content = payload.decode("utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise StorageError("文件不是有效的 UTF-8 Markdown。") from exc
+    if not content:
+        raise StorageError("Markdown 内容为空，无法整理错题。")
+
+    return content
 
 
 def save_markdown(

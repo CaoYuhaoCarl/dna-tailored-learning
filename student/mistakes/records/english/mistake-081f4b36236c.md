@@ -1,3 +1,15 @@
+---
+schema_version: 1
+id: mistake-081f4b36236c
+subject: english
+topic: present-perfect
+status: needs-review
+created_at: "2026-08-09"
+review_count: 0
+next_review_at: null
+source: "inbox/2026-08-20-english-mistakes.md"
+---
+
 # 错题记录
 
 - 学科：英语

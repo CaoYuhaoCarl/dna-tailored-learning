@@ -57,8 +57,11 @@ def test_default_skill_uses_standard_metadata_and_steps() -> None:
     assert "原题" in skills[0].description
     artifact = read_skill(skills[0].path)
     assert "Step 1" in artifact.instructions
-    assert "student/mistakes/" in artifact.instructions
+    assert "student/mistakes/inbox/" in artifact.instructions
+    assert "student/mistakes/records/" in artifact.instructions
     assert "save_mistake" in artifact.instructions
+    assert "schema_version" in artifact.instructions
+    assert "next_review_at" in artifact.instructions
 
 
 def test_read_skill_requires_frontmatter(tmp_path: Path) -> None:

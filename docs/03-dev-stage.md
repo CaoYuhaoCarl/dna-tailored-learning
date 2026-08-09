@@ -47,7 +47,11 @@ student/
 │   └── sorting-out-mistakes/
 │       └── SKILL.md
 ├── mistakes/
-│   └── mistake-<内容摘要>.md
+│   ├── inbox/
+│   │   └── <批量错题>.md
+│   └── records/
+│       └── <subject>/
+│           └── mistake-<内容摘要>.md
 ├── knowledge/
 │   └── my_card.md
 ├── workflow.md
@@ -212,11 +216,19 @@ def resume_v4(
 
 6. 在 `teacher/lesson_2_skill.ipynb` 中提供真实连续对话，并显示每轮的 `load_skill` 调用记录。
 
-7. Python 预先提供领域工具 `save_mistake`，完整 Skill 加载后由 Agent 在满足条件时调用，真实写入 `student/mistakes/`。
+7. Python 预先提供受限读取工具 `load_mistake_file`，只允许读取 `student/mistakes/inbox/` 内不超过 256 KB 的 UTF-8 Markdown，并拒绝路径越界和符号链接逃逸。
 
-8. 通用 Markdown 写入逻辑放在 `src/storage.py`，限定只能写入 `student/`，拒绝路径穿越和覆盖已有文件。
+8. 用户给出错题文件路径时，V2 先读取完整文件，识别全部错题块，再为每道题分别调用一次 `save_mistake`。
 
-9. 不向模型暴露可自由指定路径的通用 `save_file` 工具；以后新增报告或知识卡保存需求时，复用 `save_markdown` 并提供新的领域工具。
+9. Python 预先提供领域工具 `save_mistake`，完整 Skill 加载后由 Agent 在满足条件时调用，并按学科写入 `student/mistakes/records/<subject>/`。
+
+10. 每条正式错题记录包含 YAML Frontmatter 和 Markdown 正文。
+
+11. Frontmatter 使用 `schema_version`、`id`、`subject`、`topic`、`status`、`created_at`、`review_count`、`next_review_at` 和 `source` 字段，其中系统字段由 Python 生成，`source` 只保存 `chat` 或 `inbox/` 相对路径。
+
+12. 通用 Markdown 读写逻辑放在 `src/storage.py`，批量输入读取限定在 `inbox/` 内，正式记录写入限定在 `records/` 内，并拒绝路径穿越和覆盖已有文件。
+
+13. 不向模型暴露可自由指定路径的通用 `read_file` 或 `save_file` 工具；以后新增报告或知识卡读写需求时，复用底层安全函数并提供新的领域工具。
 
 ### 6.5 V3 Knowledge
 
@@ -247,6 +259,10 @@ def resume_v4(
 - 修改 `student/skill/sorting-out-mistakes/SKILL.md` 后，V2 使用新的提问线索并留下工具调用记录。
 
 - V2 在错题信息足够时调用 `save_mistake`，真实生成 Markdown；重复调用不会覆盖文件或生成重复记录。
+
+- 新生成的错题记录包含完整 YAML Frontmatter，`id` 与文件名一致，来源使用可移植的项目相对路径。
+
+- V2 收到 `student/mistakes/inbox/` 内的 Markdown 路径时调用 `load_mistake_file`，并对文件中的每道错题分别调用 `save_mistake`，结果按学科进入 `records/`。
 
 - 修改 `student/knowledge/my_card.md` 后，V3 能命中并展示准确引用。
 
