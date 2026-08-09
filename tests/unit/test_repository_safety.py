@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from src.retrieval import discover_knowledge_cards
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -183,3 +185,90 @@ def test_teacher_v2_dialogue_uses_live_input_and_displays_loaded_skill() -> None
     assert session["tool_calls"][0]["name"] == "load_skill"
     assert session["tool_calls"][1]["name"] == "load_mistake_file"
     assert session["tool_calls"][2]["name"] == "save_mistake"
+
+
+def test_default_knowledge_cards_use_unique_yaml_ids_and_required_sections() -> None:
+    knowledge_path = PROJECT_ROOT / "student" / "knowledge"
+
+    cards = discover_knowledge_cards(knowledge_path)
+
+    assert cards
+    assert len({card.card_id for card in cards}) == len(cards)
+    assert cards[0].card_id == "english-grammar-present-perfect"
+    assert cards[0].subject == "english"
+    assert cards[0].category == "grammar"
+    assert cards[0].source == (
+        "student/knowledge/english/grammar/present-perfect.md"
+    )
+    assert "three times" in cards[0].keywords
+    assert "times" in cards[0].aliases
+    assert cards[0].core_rule
+    assert cards[0].example
+    assert cards[0].common_mistake
+
+
+def test_teacher_v3_dialogue_displays_citations_and_trace() -> None:
+    notebook_path = PROJECT_ROOT / "teacher" / "lesson_3_knowledge.ipynb"
+    notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+    display_cell = next(
+        cell for cell in notebook["cells"] if cell["id"] == "v3-result-display"
+    )
+    definition_cell = next(
+        cell for cell in notebook["cells"] if cell["id"] == "v3-dialogue-definition"
+    )
+    definition = "".join(definition_cell["source"])
+    assert 'invoke("V3", student_message, history=history)' in definition
+    assert 'turn_result["citations"]' in definition
+    assert 'turn_result["trace"]' in definition
+
+    student_inputs = iter(["three times 是什么线索？", "/exit"])
+    calls = []
+
+    def fake_input(prompt: str) -> str:
+        assert prompt == "学生："
+        return next(student_inputs)
+
+    def fake_invoke(stage: str, message: str, *, history: list[dict]) -> dict:
+        calls.append((stage, message, [item.copy() for item in history]))
+        return {
+            "text": (
+                "先观察次数线索？\n\n"
+                "知识依据：[english-grammar-present-perfect] 现在完成时"
+            ),
+            "tool_calls": [],
+            "citations": [
+                {
+                    "id": "english-grammar-present-perfect",
+                    "source": (
+                        "student/knowledge/english/grammar/present-perfect.md"
+                    ),
+                    "title": "现在完成时",
+                    "matches": [
+                        {
+                            "field": "例句",
+                            "terms": [],
+                            "excerpt": "I have read this book three times.",
+                            "method": "semantic",
+                        }
+                    ],
+                }
+            ],
+            "trace": [
+                {
+                    "status": "hit",
+                    "candidates": [{"id": "english-grammar-present-perfect"}],
+                }
+            ],
+            "error": None,
+        }
+
+    namespace = {"input": fake_input, "invoke": fake_invoke}
+    exec("".join(display_cell["source"]), namespace)
+    exec(definition, namespace)
+
+    session = namespace["run_v3_dialogue"]()
+
+    assert calls == [("V3", "three times 是什么线索？", [])]
+    assert session["history"][-1]["role"] == "assistant"
+    assert session["citations"][0]["id"] == "english-grammar-present-perfect"
+    assert session["trace"][0]["status"] == "hit"
