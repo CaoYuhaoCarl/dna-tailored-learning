@@ -6,6 +6,8 @@ __pycache__/
 logs/
 .ipynb_checkpoints/
 graphify-out/
+.pi/
+docs/
 .streamlit/secrets.toml
 student/**/progress.json
 student/**/artifacts/*.md
