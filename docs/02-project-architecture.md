@@ -13,7 +13,7 @@ V4 使用 LangGraph `StateGraph` 编排扫描、检索、提问、人工修改�
 Langchain：https://docs.langchain.com/oss/python/langchain/overview
 
 ## 项目组合
-Streamlit 作为学生端主入口，Jupyter Notebook 只保留给教师讲解和调试。
+Streamlit 作为学生端主入口，JupyterLab 只保留给教师运行 Notebook、讲解和调试。
 
 决定性的原因是：学生并不学习或修改 Python，而是每个模块只修改一个 Markdown 文件；底层模型调用、检索和 LangGraph 都由教师封装。
 此时 Notebook 最重要的优势，也就是逐单元编写和运行代码，并没有真正被学生使用，反而会带来单元格误删、乱序执行、Kernel 中断和不知道该点哪里的课堂风险。
