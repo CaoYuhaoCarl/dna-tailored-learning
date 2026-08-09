@@ -69,7 +69,7 @@ def test_mistake_inbox_and_normalized_records_are_separated() -> None:
 
 
 def test_teacher_v1_dialogue_starts_from_live_student_input() -> None:
-    notebook_path = PROJECT_ROOT / "teacher" / "lesson_1_demo.ipynb"
+    notebook_path = PROJECT_ROOT / "teacher" / "lesson_1_prompt.ipynb"
     notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
     definition = next(
         "".join(cell["source"])
@@ -90,7 +90,7 @@ def test_teacher_v1_dialogue_starts_from_live_student_input() -> None:
 
 
 def test_teacher_v1_dialogue_passes_each_student_input_with_history() -> None:
-    notebook_path = PROJECT_ROOT / "teacher" / "lesson_1_demo.ipynb"
+    notebook_path = PROJECT_ROOT / "teacher" / "lesson_1_prompt.ipynb"
     notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
     definition_cell = next(
         cell

@@ -64,12 +64,12 @@ Notebook 的“一问一答式 V1”单元格会持续保存本次对话历史�
 
 此后的每次输入都会调用真实模型并携带之前的问答历史，输入 `/exit` 可以结束对话。
 
-教师演示 Notebook 位于 `teacher/lesson_1_demo.ipynb`，统一使用 JupyterLab 打开。
+教师演示 Notebook 位于 `teacher/lesson_1_prompt.ipynb`，统一使用 JupyterLab 打开。
 
 启动方式如下：
 
 ```bash
-jupyter lab teacher/lesson_1_demo.ipynb
+jupyter lab teacher/lesson_1_prompt.ipynb
 ```
 
 ## 测试 V2 Skill
