@@ -1,6 +1,6 @@
 # 青少年个性化学习 Agent
 
-当前仓库已完成第一阶段基建与 V0 模型连通开发。
+当前仓库已完成第一阶段基建、V0 模型连通和第一天的 V1 Prompt 开发。
 
 项目唯一支持的 Python 小版本是 Python 3.14，当前验证补丁版本记录在 `.python-version` 中。
 
@@ -51,6 +51,18 @@ python scripts/check_v0.py
 ```bash
 RUN_DEEPSEEK_INTEGRATION=1 python -m pytest -m integration
 ```
+
+## 测试 V1 Prompt
+
+V1 每次调用都会重新读取 `student/prompt.md`。
+
+修改并保存该文件后，只需重新运行教师 Notebook 中的 V1 调用单元格，即可观察回答方式的变化。
+
+Notebook 的“一问一答式 V1”单元格会持续保存本次对话历史。
+
+运行第 6 部分后，在 `学生：` 输入框中现场输入自己的题目。
+
+此后的每次输入都会调用真实模型并携带之前的问答历史，输入 `/exit` 可以结束对话。
 
 教师演示 Notebook 位于 `teacher/lesson_1_demo.ipynb`，统一使用 JupyterLab 打开。
 
