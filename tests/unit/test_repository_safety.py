@@ -52,7 +52,6 @@ def test_mistake_inbox_and_normalized_records_are_separated() -> None:
 
     assert not list(mistakes_root.glob("*.md"))
     assert inbox_files
-    assert record_files
     assert all(path.name.startswith("mistake-") for path in record_files)
     for path in record_files:
         content = path.read_text(encoding="utf-8")

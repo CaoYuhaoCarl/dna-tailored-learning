@@ -10,3 +10,4 @@ graphify-out/
 student/**/progress.json
 student/**/artifacts/*.md
 !student/**/artifacts/README.md
+student/mistakes/records/
