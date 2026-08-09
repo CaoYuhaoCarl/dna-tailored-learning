@@ -1,6 +1,6 @@
 # 青少年个性化学习 Agent
 
-当前仓库已完成第一阶段基建、V0 模型连通、V1 Prompt 和 V2 按需加载 Skill。
+当前仓库已完成第一阶段基建、V0 模型连通、V1 Prompt、V2 按需加载 Skill 和 V3 知识卡检索与引用。
 
 项目唯一支持的 Python 小版本是 Python 3.14，当前验证补丁版本记录在 `.python-version` 中。
 
@@ -100,4 +100,37 @@ Skill 演示 Notebook 位于 `teacher/lesson_2_skill.ipynb`：
 
 ```bash
 jupyter lab teacher/lesson_2_skill.ipynb
+```
+
+## 测试 V3 Knowledge Base
+
+V3 在 V2 的基础上，每次调用都会递归扫描 `student/knowledge/` 中的所有 `.md` 知识卡。
+
+每张知识卡使用 Schema v2 YAML front matter 保存稳定 `id`、标题、学科、分类、年级、语言、关键词和别名。
+目录统一使用 `subject/category/card.md`，例如 `english/grammar/present-perfect.md`；目录、文件名和 ID 使用小写英文 kebab-case，标题使用面向学生的自然语言。
+`grammar` 是分类目录和 `category`，每张卡只表达一个具体知识点，不创建汇总全部语法的 `grammar.md`。
+卡片首次创建后不因标题修改或文件移动而更改 `id`；对比型知识单独建卡，例如 `present-perfect-vs-past-simple.md`。
+正文顶层固定使用核心规则、例句和易错提醒三个段落。
+每个段落可以增加比所属段落更深的 Markdown 子标题，例如在例句下使用 `### 句子解析`；子标题及正文会保留在所属证据段落中，并完整提供给 Agent 作为分析方法。
+新增卡片时复制现有结构，并保证整个目录中的 `id` 唯一。
+
+检索分为两层。
+Python 先对当前问题和必要的上一轮学生问题执行标题、关键词和别名匹配，按相关分数排序，并最多提供三张完整候选卡。
+Agent 再判断候选与本轮问题是否语义相关，只有明确调用 `use_knowledge_card` 并选择真实证据段落后，Python 才生成引用。
+
+引用编号直接使用 YAML 中的稳定卡片 `id`，例如 `[english-grammar-present-perfect]`。
+结果的 `citations` 保存来源文件和实际采用的核心规则、例句或易错提醒原文，`trace` 同时记录召回候选和最终采用的卡片。
+
+如果没有候选，或候选经语义判断后未被采用，V3 继续保留 V2 的 Prompt 和 Skill 能力并返回空引用。
+
+Knowledge Base 演示 Notebook 位于 `teacher/lesson_3_knowledge.ipynb`：
+
+```bash
+jupyter lab teacher/lesson_3_knowledge.ipynb
+```
+
+运行不访问真实 API 的 V3 单元测试：
+
+```bash
+python -m pytest tests/unit/test_retrieval.py tests/unit/test_agents.py tests/unit/test_facade.py
 ```
