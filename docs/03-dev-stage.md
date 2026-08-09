@@ -44,7 +44,10 @@ V4 会诊断错因并生成练习
 student/
 ├── prompt.md
 ├── skill/
-│   └── SKILL.md
+│   └── sorting-out-mistakes/
+│       └── SKILL.md
+├── mistakes/
+│   └── mistake-<内容摘要>.md
 ├── knowledge/
 │   └── my_card.md
 ├── workflow.md
@@ -54,6 +57,7 @@ src/
 ├── model.py
 ├── schemas.py
 ├── artifacts.py
+├── storage.py
 ├── agents.py
 ├── retrieval.py
 ├── workflow.py
@@ -63,6 +67,7 @@ src/
 
 teacher/
 ├── lesson_1_demo.ipynb
+├── lesson_2_skill.ipynb
 └── lesson_2_demo.ipynb
 
 pages/
@@ -197,11 +202,21 @@ def resume_v4(
 
 1. 在 `src/agents.py` 中实现 V2 组装逻辑。
 
-2. V2 在 V1 的基础上读取 `student/skill/SKILL.md`。
+2. V2 在 V1 的基础上发现 `student/skill/` 下的 Skill，并按需读取 `student/skill/sorting-out-mistakes/SKILL.md`。
 
-3. Python 工具函数由教师预先封装，Markdown 负责描述工具用途、调用条件和提问线索。
+3. 每项 Skill 使用以 `name` 命名的独立目录，`SKILL.md` 使用包含 `name` 和 `description` 的标准 YAML frontmatter。
 
-4. 结果中必须保留工具调用记录，方便 Notebook、Streamlit 和测试判断 Skill 是否被使用。
+4. Python 的 `load_skill` 工具由教师预先封装，系统 Prompt 只暴露 Skill 元数据，完整 Markdown 指令仅在需求匹配时加载。
+
+5. 结果中必须保留工具调用记录，方便 Notebook、Streamlit 和测试判断 Skill 是否被使用。
+
+6. 在 `teacher/lesson_2_skill.ipynb` 中提供真实连续对话，并显示每轮的 `load_skill` 调用记录。
+
+7. Python 预先提供领域工具 `save_mistake`，完整 Skill 加载后由 Agent 在满足条件时调用，真实写入 `student/mistakes/`。
+
+8. 通用 Markdown 写入逻辑放在 `src/storage.py`，限定只能写入 `student/`，拒绝路径穿越和覆盖已有文件。
+
+9. 不向模型暴露可自由指定路径的通用 `save_file` 工具；以后新增报告或知识卡保存需求时，复用 `save_markdown` 并提供新的领域工具。
 
 ### 6.5 V3 Knowledge
 
@@ -229,7 +244,9 @@ def resume_v4(
 
 - 修改 `student/prompt.md` 后，V1 的提问方式发生预期变化。
 
-- 修改 `student/skill/SKILL.md` 后，V2 使用新的提问线索并留下工具调用记录。
+- 修改 `student/skill/sorting-out-mistakes/SKILL.md` 后，V2 使用新的提问线索并留下工具调用记录。
+
+- V2 在错题信息足够时调用 `save_mistake`，真实生成 Markdown；重复调用不会覆盖文件或生成重复记录。
 
 - 修改 `student/knowledge/my_card.md` 后，V3 能命中并展示准确引用。
 

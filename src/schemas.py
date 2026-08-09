@@ -26,6 +26,7 @@ def new_agent_result(
     stage: str,
     *,
     text: str = "",
+    tool_calls: list[dict[str, Any]] | None = None,
     error: str | None = None,
 ) -> AgentResult:
     """创建字段完整的 Agent 结果。"""
@@ -33,7 +34,7 @@ def new_agent_result(
     return {
         "text": text,
         "stage": stage,
-        "tool_calls": [],
+        "tool_calls": list(tool_calls or []),
         "citations": [],
         "trace": [],
         "waiting_for": None,

@@ -26,7 +26,10 @@ Streamlit 作为学生端主入口，JupyterLab 只保留给教师运行 Noteboo
 student/
 ├── prompt.md
 ├── skill/
-│   └── SKILL.md
+│   └── sorting-out-mistakes/
+│       └── SKILL.md
+├── mistakes/
+│   └── mistake-<内容摘要>.md
 ├── knowledge/
 │   └── my_card.md
 ├── workflow.md
@@ -36,6 +39,7 @@ src/
 ├── model.py
 ├── schemas.py
 ├── artifacts.py
+├── storage.py
 ├── agents.py
 ├── retrieval.py
 ├── workflow.py
@@ -45,6 +49,7 @@ src/
 
 teacher/
 ├── lesson_1_demo.ipynb
+├── lesson_2_skill.ipynb
 └── lesson_2_demo.ipynb
 
 pages/

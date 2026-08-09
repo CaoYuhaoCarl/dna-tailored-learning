@@ -1,6 +1,6 @@
 # 青少年个性化学习 Agent
 
-当前仓库已完成第一阶段基建、V0 模型连通和第一天的 V1 Prompt 开发。
+当前仓库已完成第一阶段基建、V0 模型连通、V1 Prompt 和 V2 按需加载 Skill。
 
 项目唯一支持的 Python 小版本是 Python 3.14，当前验证补丁版本记录在 `.python-version` 中。
 
@@ -70,4 +70,24 @@ Notebook 的“一问一答式 V1”单元格会持续保存本次对话历史�
 
 ```bash
 jupyter lab teacher/lesson_1_demo.ipynb
+```
+
+## 测试 V2 Skill
+
+V2 启动时只向模型提供 `student/skill/` 下各项 Skill 的 `name` 和 `description`。
+
+只有当对话需求匹配时，Agent 才会调用 `load_skill` 读取完整 `SKILL.md`，调用记录保存在结果的 `tool_calls` 字段中。
+
+错题整理 Skill 加载后，Agent 会复用对话中已有信息。
+
+当学生明确要求整理或保存时，未知分析字段会标记为“待补充”，不会为了凑齐字段无限追问。
+
+随后 Agent 调用受限的 `save_mistake` 工具，将单道错题真实写入 `student/mistakes/mistake-<内容摘要>.md`。
+
+底层 `src/storage.py` 只允许在 `student/` 下新建 Markdown，并拒绝任意路径和静默覆盖。
+
+Skill 演示 Notebook 位于 `teacher/lesson_2_skill.ipynb`：
+
+```bash
+jupyter lab teacher/lesson_2_skill.ipynb
 ```
