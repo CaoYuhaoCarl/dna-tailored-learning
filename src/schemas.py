@@ -1,6 +1,13 @@
 """跨版本共享的数据契约。"""
 
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
+
+
+class ChatMessage(TypedDict):
+    """V1 多轮对话中由调用方保存的一条消息。"""
+
+    role: Literal["user", "assistant"]
+    content: str
 
 
 class AgentResult(TypedDict):
