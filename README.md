@@ -1,6 +1,6 @@
 # 青少年个性化学习 Agent
 
-当前仓库已完成第一阶段基建、V0 模型连通和第一天的 V1 Prompt 开发。
+当前仓库已完成第一阶段基建、V0 模型连通、V1 Prompt 和 V2 按需加载 Skill。
 
 项目唯一支持的 Python 小版本是 Python 3.14，当前验证补丁版本记录在 `.python-version` 中。
 
@@ -70,4 +70,34 @@ Notebook 的“一问一答式 V1”单元格会持续保存本次对话历史�
 
 ```bash
 jupyter lab teacher/lesson_1_demo.ipynb
+```
+
+## 测试 V2 Skill
+
+V2 启动时只向模型提供 `student/skill/` 下各项 Skill 的 `name` 和 `description`。
+
+只有当对话需求匹配时，Agent 才会调用 `load_skill` 读取完整 `SKILL.md`，调用记录保存在结果的 `tool_calls` 字段中。
+
+错题整理 Skill 加载后，Agent 会复用对话中已有信息。
+
+当学生明确要求整理或保存时，未知分析字段会标记为“待补充”，不会为了凑齐字段无限追问。
+
+如果学生提供 `student/mistakes/inbox/` 内的 Markdown 路径，Agent 会先调用受限的 `load_mistake_file` 工具读取文件。
+
+该工具支持绝对路径和相对于 `student/mistakes/inbox/` 的路径，只允许读取 UTF-8 `.md` 普通文件，并限制文件大小为 256 KB。
+
+文件中包含多道错题时，Agent 会逐题整理，并为每道题分别调用一次 `save_mistake`。
+
+随后 Agent 调用受限的 `save_mistake` 工具，将单道错题按学科写入 `student/mistakes/records/<subject>/mistake-<内容摘要>.md`。
+
+每条正式记录都包含 YAML Frontmatter 和学生可读的 Markdown 正文。
+
+Frontmatter 保存稳定 ID、学科、主题、来源和复习状态等机器可读字段，后续检索和复习功能应以这些记录为唯一数据源。
+
+底层 `src/storage.py` 只允许从 `inbox/` 读取批量输入，或在 `records/` 下新建正式记录，并拒绝路径越界、符号链接逃逸和静默覆盖。
+
+Skill 演示 Notebook 位于 `teacher/lesson_2_skill.ipynb`：
+
+```bash
+jupyter lab teacher/lesson_2_skill.ipynb
 ```
