@@ -9,7 +9,7 @@
 5. 授课：用腾讯会议直播演示、听课；
 6. 课次与时长：2次课；每次课120分钟;
 7. 会有家长辅导，如LLM API KEY会提前申请好;
-8. 每课一个jupyter notebook;
+8. 每课一个在 JupyterLab 中运行的教师演示 Notebook;
 9. 单仓库双区域：同一项目内student、 teacher、 src，学生入口清楚且teacher代码可测试。
 
 ---
@@ -123,10 +123,12 @@ Agent回答时要先基于Markdown格式的知识库。
 主技术栈：
 - LangGraph + LangChain
 - Python；
-- Jupyter Notebook （代码运行和演示讲解、展示）；
+- JupyterLab（运行、讲解和展示教师 Notebook）；
 - Markdown知识库
 
-所有依赖必须写入 requirements.txt，并提供经过测试的版本组合。
+学生运行依赖写入 `requirements.txt`，JupyterLab 和测试工具等教师开发依赖写入 `requirements-dev.txt`。
+
+两个依赖文件都必须锁定版本，并提供经过测试的版本组合。
 
 ---
 

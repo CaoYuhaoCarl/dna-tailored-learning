@@ -22,9 +22,9 @@ V4 会诊断错因并生成练习
 
 ## 二、全局工程原则
 
-1. `src/` 是核心逻辑的唯一来源，Jupyter Notebook 和 Streamlit 都只能调用 `src/` 中的接口。
+1. `src/` 是核心逻辑的唯一来源，JupyterLab 中的教师 Notebook 和 Streamlit 都只能调用 `src/` 中的接口。
 
-2. Jupyter Notebook 用于教师演示、调试和查看中间状态，不保存最终业务逻辑。
+2. JupyterLab 用于运行教师 Notebook、演示、调试和查看中间状态，不保存最终业务逻辑。
 
 3. Streamlit 只负责界面、输入收集和结果展示，不直接组装 LangChain Agent 或 LangGraph。
 
@@ -131,7 +131,7 @@ def resume_v4(
 
 ### 5.1 阶段目标
 
-建立稳定的 Python 环境，通过 `src/model.py` 调通 DeepSeek，并在教师 Notebook 中运行第一个 V0 对话。
+建立稳定的 Python 环境，通过 `src/model.py` 调通 DeepSeek，并在 JupyterLab 的教师 Notebook 中运行第一个 V0 对话。
 
 ### 5.2 开发任务
 
@@ -139,7 +139,7 @@ def resume_v4(
 
 2. 在 `requirements.txt` 中锁定学生运行所需的依赖版本。
 
-3. 创建 `requirements-dev.txt`，放置 Jupyter、pytest 等教师和开发环境依赖。
+3. 创建 `requirements-dev.txt`，放置 JupyterLab、pytest 等教师和开发环境依赖，不安装 `notebook` 应用。
 
 4. 创建 `.env.example`，只保存环境变量名称和说明，不保存真实 API Key。
 
