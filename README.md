@@ -52,7 +52,7 @@ python scripts/check_v0.py
 RUN_DEEPSEEK_INTEGRATION=1 python -m pytest -m integration
 ```
 
-## 测试 V1 Prompt
+## V1 Agent Prompt
 
 V1 每次调用都会重新读取 `student/prompt.md`。
 
@@ -72,7 +72,7 @@ Notebook 的“一问一答式 V1”单元格会持续保存本次对话历史�
 jupyter lab teacher/lesson_1_prompt.ipynb
 ```
 
-## 测试 V2 Skill
+## V2 Agent Skill
 
 V2 启动时只向模型提供 `student/skill/` 下各项 Skill 的 `name` 和 `description`。
 
@@ -102,7 +102,7 @@ Skill 演示 Notebook 位于 `teacher/lesson_2_skill.ipynb`：
 jupyter lab teacher/lesson_2_skill.ipynb
 ```
 
-## 测试 V3 Knowledge Base
+## V3 Agent Knowledge Base
 
 V3 在 V2 的基础上，每次调用都会递归扫描 `student/knowledge/` 中的所有 `.md` 知识卡。
 
