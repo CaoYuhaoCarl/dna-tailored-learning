@@ -32,7 +32,7 @@ copy .env.example .env
 
 不要把真实 API Key 写入源码或 Notebook。
 
-## 验证 V0
+## V0 常规Chatbot
 
 先运行不访问真实 API 的测试：
 
