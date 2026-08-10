@@ -19,6 +19,16 @@ def test_default_student_prompt_contains_socratic_rules() -> None:
     assert "不直接给出填空答案或完整答案" in prompt
 
 
+def test_default_student_prompt_routes_non_exercises_to_normal_mode() -> None:
+    prompt = read_markdown(PROMPT_PATH)
+
+    assert "最高优先级：先判断回答模式" in prompt
+    assert "普通模式" in prompt
+    assert "不得编造题目" in prompt
+    assert "不强制提问" in prompt
+    assert "不回答与学习无关的问题" not in prompt
+
+
 def test_read_markdown_returns_trimmed_content(tmp_path: Path) -> None:
     prompt_path = tmp_path / "prompt.md"
     prompt_path.write_text("\n# 测试 Prompt\n\n保留内部空行。\n", encoding="utf-8")
