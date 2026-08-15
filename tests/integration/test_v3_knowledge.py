@@ -7,8 +7,8 @@ from src.facade import invoke
 
 @pytest.mark.integration
 def test_v3_retrieves_and_cites_default_knowledge_card() -> None:
-    if os.getenv("RUN_DEEPSEEK_INTEGRATION") != "1":
-        pytest.skip("设置 RUN_DEEPSEEK_INTEGRATION=1 后才调用真实 DeepSeek。")
+    if os.getenv("RUN_MODEL_INTEGRATION") != "1":
+        pytest.skip("设置 RUN_MODEL_INTEGRATION=1 后才调用真实模型。")
 
     result = invoke(
         "V3",

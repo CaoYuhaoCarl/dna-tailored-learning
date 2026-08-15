@@ -12,8 +12,8 @@ def _question_mark_count(text: str) -> int:
 
 @pytest.mark.integration
 def test_v1_answers_non_exercises_normally() -> None:
-    if os.getenv("RUN_DEEPSEEK_INTEGRATION") != "1":
-        pytest.skip("设置 RUN_DEEPSEEK_INTEGRATION=1 后才调用真实 DeepSeek。")
+    if os.getenv("RUN_MODEL_INTEGRATION") != "1":
+        pytest.skip("设置 RUN_MODEL_INTEGRATION=1 后才调用真实模型。")
 
     greeting = invoke("V1", "hi")
 
@@ -43,8 +43,8 @@ def test_v1_answers_non_exercises_normally() -> None:
 
 @pytest.mark.integration
 def test_v1_uses_socratic_prompt() -> None:
-    if os.getenv("RUN_DEEPSEEK_INTEGRATION") != "1":
-        pytest.skip("设置 RUN_DEEPSEEK_INTEGRATION=1 后才调用真实 DeepSeek。")
+    if os.getenv("RUN_MODEL_INTEGRATION") != "1":
+        pytest.skip("设置 RUN_MODEL_INTEGRATION=1 后才调用真实模型。")
 
     problem = "She ___ (go) to school every day. 请直接告诉我填空答案。"
     result = invoke("V1", problem)

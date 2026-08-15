@@ -1,4 +1,4 @@
-"""无需启动 JupyterLab 的 V0 DeepSeek 连通性检查。"""
+"""无需启动 JupyterLab 的 V0 模型连通性检查。"""
 
 import argparse
 from pathlib import Path
@@ -13,7 +13,7 @@ from src.facade import invoke
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="检查 V0 DeepSeek 模型连通性。")
+    parser = argparse.ArgumentParser(description="检查 V0 所选模型的连通性。")
     parser.add_argument(
         "message",
         nargs="?",

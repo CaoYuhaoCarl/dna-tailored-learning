@@ -41,8 +41,8 @@ def test_v4_generates_grounded_report_and_practice(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    if os.getenv("RUN_DEEPSEEK_INTEGRATION") != "1":
-        pytest.skip("设置 RUN_DEEPSEEK_INTEGRATION=1 后才调用真实 DeepSeek。")
+    if os.getenv("RUN_MODEL_INTEGRATION") != "1":
+        pytest.skip("设置 RUN_MODEL_INTEGRATION=1 后才调用真实模型。")
 
     records_root = tmp_path / "student" / "mistakes" / "records"
     report_path = tmp_path / "student" / "reports" / "learning-review.md"
