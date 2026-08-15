@@ -7,6 +7,7 @@ import re
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PROMPT_PATH = PROJECT_ROOT / "student" / "prompt.md"
+V4_PROMPT_PATH = PROJECT_ROOT / "student" / "v4-prompt.md"
 SKILLS_PATH = PROJECT_ROOT / "student" / "skill"
 
 

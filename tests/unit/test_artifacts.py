@@ -6,6 +6,7 @@ from src.artifacts import (
     ArtifactError,
     PROMPT_PATH,
     SKILLS_PATH,
+    V4_PROMPT_PATH,
     discover_skills,
     read_markdown,
     read_skill,
@@ -27,6 +28,16 @@ def test_default_student_prompt_routes_non_exercises_to_normal_mode() -> None:
     assert "不得编造题目" in prompt
     assert "不强制提问" in prompt
     assert "不回答与学习无关的问题" not in prompt
+
+
+def test_v4_prompt_is_all_subject_and_preserves_write_boundary() -> None:
+    prompt = read_markdown(V4_PROMPT_PATH)
+
+    assert "全学科" in prompt
+    assert "知识解释" in prompt
+    assert "苏格拉底" in prompt
+    assert "不得声称已经保存错题" in prompt
+    assert "不得直接透露当前个性化练习的参考答案" in prompt
 
 
 def test_read_markdown_returns_trimmed_content(tmp_path: Path) -> None:
