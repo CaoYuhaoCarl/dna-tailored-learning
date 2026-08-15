@@ -74,3 +74,24 @@ def test_invoke_routes_v3(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert result is expected
     assert received_history is history
+
+
+def test_chat_v4_delegates_to_workflow(monkeypatch: pytest.MonkeyPatch) -> None:
+    expected = new_agent_result(
+        "V4",
+        text="V4 回复",
+        waiting_for="student_message",
+    )
+    received = None
+
+    def fake_chat_v4(message: str, thread_id: str):
+        nonlocal received
+        received = (message, thread_id)
+        return expected
+
+    monkeypatch.setattr(facade_module, "_chat_v4", fake_chat_v4)
+
+    result = facade_module.chat_v4("继续", "student-1")
+
+    assert result is expected
+    assert received == ("继续", "student-1")

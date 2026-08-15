@@ -40,6 +40,74 @@ class Citation(TypedDict):
     matches: list[CitationMatch]
 
 
+WorkflowIntent = Literal[
+    "answer",
+    "tutor",
+    "organize_mistakes",
+    "review",
+    "cancel",
+    "clarify",
+]
+
+WorkflowMode = Literal[
+    "idle",
+    "tutoring",
+    "organizing",
+    "practice",
+    "review_decision",
+]
+
+WaitingFor = Literal["student_message", "review_decision"]
+
+
+class PracticeItem(TypedDict):
+    """复盘后只向学生展示题目，其余字段保留在运行期状态中。"""
+
+    question: str
+    expected_answer: str
+    reasoning: str
+    subject: str
+    topic: str
+    source_record_ids: list[str]
+
+
+class PendingReport(TypedDict):
+    """在模型生成和原子写入之间保存的可恢复报告草稿。"""
+
+    request_id: str
+    version: int
+    expected_digest: str | None
+    markdown: str
+    reply_prefix: str
+    reply_summary: str
+
+
+class WorkflowState(TypedDict):
+    """V4 中可被 LangGraph checkpoint 序列化的完整状态。"""
+
+    thread_id: str
+    messages: list[ChatMessage]
+    current_message: str
+    intent: WorkflowIntent
+    mode: WorkflowMode
+    active_problem: str | None
+    active_problem_has_error: bool
+    pending_review: bool
+    skip_unsaved_for_review: bool
+    review_request_id: str | None
+    pending_report: PendingReport | None
+    practice_item: PracticeItem | None
+    citations: list[Citation]
+    tool_calls: list[dict[str, Any]]
+    saved_record_ids: list[str]
+    write_receipts: dict[str, str]
+    last_reply: str
+    trace: list[dict[str, Any]]
+    waiting_for: WaitingFor | None
+    error: str | None
+    turn_index: int
+
+
 class AgentResult(TypedDict):
     """V0 到 V4 对上层暴露的统一结果结构。"""
 
@@ -59,6 +127,7 @@ def new_agent_result(
     tool_calls: list[dict[str, Any]] | None = None,
     citations: list[Citation] | None = None,
     trace: list[dict[str, Any]] | None = None,
+    waiting_for: WaitingFor | None = None,
     error: str | None = None,
 ) -> AgentResult:
     """创建字段完整的 Agent 结果。"""
@@ -69,6 +138,6 @@ def new_agent_result(
         "tool_calls": list(tool_calls or []),
         "citations": list(citations or []),
         "trace": list(trace or []),
-        "waiting_for": None,
+        "waiting_for": waiting_for,
         "error": error,
     }

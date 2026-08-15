@@ -4,6 +4,13 @@ from collections.abc import Sequence
 
 from src.agents import invoke_v0, invoke_v1, invoke_v2, invoke_v3
 from src.schemas import AgentResult, ChatMessage, new_agent_result
+from src.workflow import chat_v4 as _chat_v4
+
+
+def chat_v4(message: str, thread_id: str) -> AgentResult:
+    """启动或恢复由 LangGraph checkpoint 管理的 V4 长对话。"""
+
+    return _chat_v4(message, thread_id)
 
 
 def invoke(

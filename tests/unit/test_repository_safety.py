@@ -1,4 +1,7 @@
+import ast
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 from src.retrieval import discover_knowledge_cards
@@ -18,6 +21,7 @@ def test_sensitive_files_are_ignored() -> None:
     assert "*.log" in ignored_entries
     assert ".ipynb_checkpoints/" in ignored_entries
     assert ".streamlit/secrets.toml" in ignored_entries
+    assert "student/reports/" in ignored_entries
 
 
 def test_teacher_environment_uses_jupyterlab_only() -> None:
@@ -47,6 +51,21 @@ def test_teacher_notebooks_have_no_saved_outputs() -> None:
         assert all(cell["outputs"] == [] for cell in code_cells), notebook_path
 
 
+def test_teacher_notebook_code_cells_have_valid_python_syntax() -> None:
+    notebook_paths = sorted((PROJECT_ROOT / "teacher").glob("lesson_*.ipynb"))
+
+    assert notebook_paths
+    for notebook_path in notebook_paths:
+        notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+        for cell in notebook["cells"]:
+            if cell["cell_type"] != "code":
+                continue
+            ast.parse(
+                "".join(cell["source"]),
+                filename=f"{notebook_path} cell {cell.get('id', 'unknown')}",
+            )
+
+
 def test_mistake_inbox_and_normalized_records_are_separated() -> None:
     mistakes_root = PROJECT_ROOT / "student" / "mistakes"
     inbox_files = sorted((mistakes_root / "inbox").glob("*.md"))
@@ -66,7 +85,7 @@ def test_mistake_inbox_and_normalized_records_are_separated() -> None:
         assert "created_at: \"" in content
         assert "review_count: 0" in content
         assert "next_review_at: null" in content
-        assert 'source: "inbox/' in content
+        assert 'source: "chat"' in content or 'source: "inbox/' in content
         assert "# 错题记录" in content
 
 
@@ -84,11 +103,11 @@ def test_teacher_v1_dialogue_starts_from_live_student_input() -> None:
         if "v1_dialogue_history = run_v1_dialogue()" in "".join(cell["source"])
     )
 
-    assert 'student_message = input("学生：")' in definition
+    assert 'student_message = input("你：")' in definition
     assert 'invoke("V1", student_message, history=history)' in definition
     assert "ask_v1(question)" not in definition
     assert "START_INTERACTIVE_V1" not in launcher
-    assert launcher.strip() == "v1_dialogue_history = run_v1_dialogue()"
+    assert launcher.rstrip().endswith("v1_dialogue_history = run_v1_dialogue()")
 
 
 def test_teacher_v1_dialogue_passes_each_student_input_with_history() -> None:
@@ -103,7 +122,7 @@ def test_teacher_v1_dialogue_passes_each_student_input_with_history() -> None:
     calls = []
 
     def fake_input(prompt: str) -> str:
-        assert prompt == "学生："
+        assert prompt == "你："
         return next(student_inputs)
 
     def fake_invoke(stage: str, message: str, *, history: list[dict]) -> dict:
@@ -113,7 +132,7 @@ def test_teacher_v1_dialogue_passes_each_student_input_with_history() -> None:
     namespace = {"input": fake_input, "invoke": fake_invoke}
     exec("".join(definition_cell["source"]), namespace)
 
-    history = namespace["run_v1_dialogue"]()
+    history = namespace["v1_dialogue_history"]
 
     assert calls == [
         ("V1", "我的题目", []),
@@ -272,3 +291,41 @@ def test_teacher_v3_dialogue_displays_citations_and_trace() -> None:
     assert session["history"][-1]["role"] == "assistant"
     assert session["citations"][0]["id"] == "english-grammar-present-perfect"
     assert session["trace"][0]["status"] == "hit"
+
+
+def test_teacher_v4_dialogue_uses_one_thread_and_public_facade() -> None:
+    notebook_path = PROJECT_ROOT / "teacher" / "lesson_4_workflow.ipynb"
+    notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+    source = "\n".join(
+        "".join(cell["source"])
+        for cell in notebook["cells"]
+        if cell["cell_type"] == "code"
+    )
+
+    assert "from src.facade import chat_v4" in source
+    assert 'if project_root.name == "teacher":' in source
+    assert "sys.path.insert(0, str(project_root))" in source
+    assert 'THREAD_ID = "lesson-4-demo"' in source
+    assert "chat_v4(student_message, THREAD_ID)" in source
+    assert 'input("你：")' in source
+    assert "result['waiting_for']" in source
+    assert "StateGraph" not in source
+    assert "get_llm" not in source
+
+
+def test_teacher_v4_import_cell_runs_from_teacher_directory() -> None:
+    notebook_path = PROJECT_ROOT / "teacher" / "lesson_4_workflow.ipynb"
+    notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+    import_cell = next(
+        cell for cell in notebook["cells"] if cell.get("id") == "v4-import"
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", "".join(import_cell["source"])],
+        cwd=notebook_path.parent,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr

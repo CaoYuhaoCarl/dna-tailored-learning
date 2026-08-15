@@ -1,6 +1,6 @@
 # 青少年个性化学习 Agent
 
-当前仓库已完成第一阶段基建、V0 模型连通、V1 Prompt、V2 按需加载 Skill 和 V3 知识卡检索与引用。
+当前仓库已完成第一阶段基建、V0 模型连通、V1 Prompt、V2 按需加载 Skill、V3 知识卡检索与引用和 V4 用户主导型学习 Workflow。
 
 项目唯一支持的 Python 小版本是 Python 3.14，当前验证补丁版本记录在 `.python-version` 中。
 
@@ -60,7 +60,7 @@ V1 每次调用都会重新读取 `student/prompt.md`。
 
 Notebook 的“一问一答式 V1”单元格会持续保存本次对话历史。
 
-运行第 6 部分后，在 `学生：` 输入框中现场输入自己的题目。
+运行第 6 部分后，在 `你：` 输入框中现场输入自己的题目。
 
 此后的每次输入都会调用真实模型并携带之前的问答历史，输入 `/exit` 可以结束对话。
 
@@ -133,4 +133,46 @@ jupyter lab teacher/lesson_3_knowledge.ipynb
 
 ```bash
 python -m pytest tests/unit/test_retrieval.py tests/unit/test_agents.py tests/unit/test_facade.py
+```
+
+## V4 Agent Workflow
+
+V4 使用 LangGraph `StateGraph` 和运行期 `InMemorySaver` 管理同一个 `thread_id` 中的长期学习对话。
+
+普通答疑和具体题目会自动进入只读辅导分支。
+
+只读分支最多调用知识卡工具，不具备保存错题或更新报告的工具。
+
+只有学生明确要求整理、保存或归档错题时，Workflow 才会调用现有错题 Skill 和确定性保存工具。
+
+只有学生明确要求总结复盘时，Workflow 才会读取 `student/mistakes/records/` 中的正式记录，并原子更新 `student/reports/learning-review.md`。
+
+如果当前对话中还有已经确认出错但未整理的题目，学生需要明确选择“整理后复盘”或“跳过当前题直接复盘”。
+
+每次成功复盘会在报告和聊天中生成一道同知识点、近似难度但不同表述的新题。
+
+参考答案和判断依据只保存在运行期 Workflow State 中，不写入报告，也不提前展示给学生。
+
+应用进程重启后未完成的对话状态会清空，但正式错题和累计报告仍然保留。
+
+稳定调用入口如下：
+
+```python
+from src.facade import chat_v4
+
+result = chat_v4("什么是现在完成时？", thread_id="student-demo")
+print(result["text"])
+print(result["waiting_for"])
+```
+
+Workflow 演示 Notebook 位于 `teacher/lesson_4_workflow.ipynb`：
+
+```bash
+jupyter lab teacher/lesson_4_workflow.ipynb
+```
+
+运行 V4 离线测试：
+
+```bash
+python -m pytest tests/unit/test_reporting.py tests/unit/test_workflow.py
 ```

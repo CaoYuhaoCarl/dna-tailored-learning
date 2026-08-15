@@ -615,6 +615,112 @@ def test_save_mistake_tool_reports_failure_outside_records_root(
     assert not outside_path.exists()
 
 
+def test_invoke_v4_coach_never_binds_write_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = ToolCallingFakeModel(
+        responses=[AIMessage(content="光合作用会把光能转化为化学能。")]
+    )
+    monkeypatch.setattr(agents_module, "get_llm", lambda: model)
+
+    result = agents_module.invoke_v4_coach("什么是光合作用？")
+
+    assert result["error"] is None
+    assert model.bound_tool_names == []
+    assert result["tool_calls"] == []
+    assert "本轮未找到候选知识卡" in result["text"]
+
+
+def test_invoke_v4_coach_with_knowledge_only_binds_citation_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = ToolCallingFakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "use_knowledge_card",
+                        "args": {
+                            "card_id": "english-grammar-present-perfect",
+                            "evidence_fields": ["核心规则"],
+                        },
+                        "id": "knowledge-1",
+                    }
+                ],
+            ),
+            AIMessage(content="先观察 three times 这个次数线索？"),
+        ]
+    )
+    monkeypatch.setattr(agents_module, "get_llm", lambda: model)
+
+    result = agents_module.invoke_v4_coach(
+        "I ____ (read) this book three times."
+    )
+
+    assert result["error"] is None
+    assert model.bound_tool_names == ["use_knowledge_card"]
+    assert result["citations"][0]["id"] == "english-grammar-present-perfect"
+    assert all(
+        call["name"] not in {"load_skill", "load_mistake_file", "save_mistake"}
+        for call in result["tool_calls"]
+    )
+
+
+def test_agent_trace_keeps_verified_save_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    records_path = tmp_path / "student" / "mistakes" / "records"
+    inbox_path = tmp_path / "student" / "mistakes" / "inbox"
+    save_tool = agents_module._create_save_mistake_tool(
+        records_path,
+        records_path,
+        inbox_path,
+    )
+    model = ToolCallingFakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "save_mistake",
+                        "args": {
+                            "subject": "数学",
+                            "topic": "linear-equations",
+                            "source": "chat",
+                            "problem_type": "方程",
+                            "original_question": "x + 2 = 5",
+                            "student_answer": "x = 2",
+                            "correct_answer": "x = 3",
+                            "correct_reasoning": "两边同时减 2。",
+                            "error_reason": "移项计算错误。",
+                            "knowledge_point": "一元一次方程",
+                            "next_reminder": "代回原式检查。",
+                        },
+                        "id": "save-1",
+                    }
+                ],
+            ),
+            AIMessage(content="错题已保存。"),
+        ]
+    )
+    monkeypatch.setattr(agents_module, "get_llm", lambda: model)
+
+    result = agents_module._invoke_agent_with_tools(
+        stage="V4",
+        message="保存这道错题",
+        conversation=[],
+        system_prompt="调用工具保存。",
+        tools=[save_tool],
+    )
+
+    assert result["error"] is None
+    assert result["trace"][0]["name"] == "save_mistake"
+    assert result["trace"][0]["status"] == "success"
+    assert "保存成功" in result["trace"][0]["content"]
+
+
 @pytest.mark.parametrize(
     ("subject", "directory"),
     [("英语", "english"), ("English", "english"), ("数学", "math")],
