@@ -118,7 +118,7 @@ def test_invoke_v0_returns_actionable_api_error(monkeypatch: pytest.MonkeyPatch)
     result = agents_module.invoke_v0("测试")
 
     assert result["error"] is not None
-    assert "检查网络、API Key、账户余额和模型名称" in result["error"]
+    assert "检查网络、API Key、账户余额和供应商配置" in result["error"]
     assert "secret details" not in result["error"]
 
 

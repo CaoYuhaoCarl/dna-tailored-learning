@@ -28,7 +28,13 @@ python -m pip install -r requirements-dev.txt
 copy .env.example .env
 ```
 
-打开 `.env`，只填写自己的 `DEEPSEEK_API_KEY`。
+打开 `.env`，将 `MODEL_PROVIDER` 设置为 `deepseek`、`moonshot` 或 `gemini`，再填写对应的 API Key。
+
+三个 Key 可以同时保存在 `.env` 中，程序只检查 `MODEL_PROVIDER` 选中的一项。
+
+V0 到 V4 共用该设置，不需要为每个 Agent 单独配置模型。
+
+修改 `MODEL_PROVIDER` 后，必须重启 Jupyter Kernel 或重新启动程序，再重新运行模型初始化单元格。
 
 不要把真实 API Key 写入源码或 Notebook。
 
@@ -40,7 +46,7 @@ copy .env.example .env
 python -m pytest -m "not integration"
 ```
 
-再运行独立的 DeepSeek 连通性检查：
+再运行独立的模型连通性检查：
 
 ```bash
 python scripts/check_v0.py
@@ -49,7 +55,7 @@ python scripts/check_v0.py
 也可以显式运行真实 API 集成测试：
 
 ```bash
-RUN_DEEPSEEK_INTEGRATION=1 python -m pytest -m integration
+RUN_MODEL_INTEGRATION=1 python -m pytest -m integration
 ```
 
 ## V1 Agent Prompt

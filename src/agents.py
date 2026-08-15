@@ -751,7 +751,7 @@ def _finalize_knowledge_result(
 
 
 def invoke_v0(message: str) -> AgentResult:
-    """直接调用 DeepSeek，不挂载 Prompt、Skill、Knowledge 或 Workflow。"""
+    """直接调用所选模型，不挂载 Prompt、Skill、Knowledge 或 Workflow。"""
 
     clean_message = message.strip()
     if not clean_message:
@@ -765,7 +765,7 @@ def invoke_v0(message: str) -> AgentResult:
         return new_agent_result(
             "V0",
             error=(
-                "DeepSeek 调用失败。请检查网络、API Key、账户余额和模型名称后重试。"
+                "模型调用失败。请检查网络、API Key、账户余额和供应商配置后重试。"
                 f"错误类型：{type(exc).__name__}。"
             ),
         )
@@ -774,7 +774,7 @@ def invoke_v0(message: str) -> AgentResult:
     if not text:
         return new_agent_result(
             "V0",
-            error="DeepSeek 返回了空内容，请稍后重试。",
+            error="模型返回了空内容，请稍后重试。",
         )
     return new_agent_result("V0", text=text)
 
