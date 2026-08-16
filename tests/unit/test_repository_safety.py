@@ -329,3 +329,33 @@ def test_teacher_v4_import_cell_runs_from_teacher_directory() -> None:
     )
 
     assert completed.returncode == 0, completed.stderr
+
+
+def test_streamlit_home_does_not_assemble_or_call_models() -> None:
+    source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (
+            PROJECT_ROOT / "app.py",
+            PROJECT_ROOT / "app_pages" / "home.py",
+        )
+    )
+
+    assert "get_llm" not in source
+    assert "StateGraph" not in source
+    assert "create_agent" not in source
+    assert "chat_v4" not in source
+
+
+def test_streamlit_lesson_1_uses_facade_without_agent_assembly() -> None:
+    source = (PROJECT_ROOT / "pages" / "1_prompt_and_skill.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "from src.facade import" in source
+    assert "get_llm" not in source
+    assert "StateGraph" not in source
+    assert "create_agent" not in source
+    assert "from src.agents" not in source
+    assert "write_text(" not in source
+    assert "st.chat_input(" in source
+    assert "st.form(" not in source

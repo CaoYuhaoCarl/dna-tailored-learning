@@ -62,8 +62,8 @@ def _read_int(name: str, default: int, *, minimum: int) -> int:
     return value
 
 
-def get_llm() -> BaseChatModel:
-    """根据 MODEL_PROVIDER 创建所有 V0-V4 共用的聊天模型实例。"""
+def validate_model_configuration() -> str:
+    """校验模型供应商和 API Key，但不创建模型实例。"""
 
     load_dotenv(ENV_FILE, override=False)
 
@@ -75,12 +75,20 @@ def get_llm() -> BaseChatModel:
             f"当前值为 {provider!r}。请修改 .env。"
         )
 
-    api_key = os.getenv(key_name, "").strip()
-    if not api_key:
+    if not os.getenv(key_name, "").strip():
         raise ModelConfigurationError(
             f"MODEL_PROVIDER={provider}，但未找到 {key_name}。"
             "请复制 .env.example 为 .env，再填写所选供应商的 API Key。"
         )
+
+    return provider
+
+
+def get_llm() -> BaseChatModel:
+    """根据 MODEL_PROVIDER 创建所有 V0-V4 共用的聊天模型实例。"""
+
+    provider = validate_model_configuration()
+    api_key = os.environ[MODEL_PROVIDER_KEYS[provider]].strip()
 
     timeout = _read_float("MODEL_TIMEOUT_SECONDS", 45.0, minimum=0.1)
     max_retries = _read_int("MODEL_MAX_RETRIES", 2, minimum=0)
