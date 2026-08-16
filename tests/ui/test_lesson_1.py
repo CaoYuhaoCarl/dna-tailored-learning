@@ -9,7 +9,7 @@ from src.schemas import new_agent_result
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-PAGE_PATH = PROJECT_ROOT / "pages" / "1_prompt_and_skill.py"
+PAGE_PATH = PROJECT_ROOT / "app_pages" / "lesson_1.py"
 
 
 def _artifact(stage: str, content: str, digest: str) -> facade_module.LessonArtifact:
@@ -85,7 +85,7 @@ def test_lesson_1_non_chat_actions_never_invoke_model(monkeypatch) -> None:
     assert app.sidebar.status[0].label == "比较三个助手的回答"
     assert len(app.main.chat_message) == 1
     assert not app.sidebar.chat_message
-    assert app.chat_input[0].placeholder == "和原始助手聊聊，按发送键后它才会回答"
+    assert app.chat_input[0].placeholder == "和原始普通AI聊天"
     invoke.assert_not_called()
     save_artifact.assert_not_called()
     load_progress.assert_called_once_with()
@@ -110,7 +110,7 @@ def test_lesson_1_saves_training_separately_then_chats_once(monkeypatch) -> None
         "# 新 Prompt\n\n一次只问一个问题。"
     )
 
-    _widget_by_label(app.button, "保存给助手").click().run()
+    _widget_by_label(app.button, "保存").click().run()
 
     assert not app.exception
     save_artifact.assert_called_once_with(
@@ -157,7 +157,7 @@ def test_lesson_1_save_error_never_sends_a_chat_message(monkeypatch) -> None:
     app = AppTest.from_file(PAGE_PATH).run()
     app.segmented_control[0].set_value("V2").run()
 
-    _widget_by_label(app.button, "保存给助手").click().run()
+    _widget_by_label(app.button, "保存").click().run()
 
     assert not app.exception
     save_artifact.assert_called_once()
