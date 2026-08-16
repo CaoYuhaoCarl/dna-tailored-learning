@@ -4,7 +4,7 @@ import pytest
 
 from src.artifacts import (
     ArtifactError,
-    PROMPT_PATH,
+    PROMPT_TEMPLATE_PATH,
     SKILLS_PATH,
     V4_PROMPT_PATH,
     discover_skills,
@@ -13,15 +13,15 @@ from src.artifacts import (
 )
 
 
-def test_default_student_prompt_contains_socratic_rules() -> None:
-    prompt = read_markdown(PROMPT_PATH)
+def test_default_prompt_template_contains_socratic_rules() -> None:
+    prompt = read_markdown(PROMPT_TEMPLATE_PATH)
 
     assert "一次只能问一个简短问题" in prompt
     assert "不直接给出填空答案或完整答案" in prompt
 
 
-def test_default_student_prompt_routes_non_exercises_to_normal_mode() -> None:
-    prompt = read_markdown(PROMPT_PATH)
+def test_default_prompt_template_routes_non_exercises_to_normal_mode() -> None:
+    prompt = read_markdown(PROMPT_TEMPLATE_PATH)
 
     assert "最高优先级：先判断回答模式" in prompt
     assert "普通模式" in prompt

@@ -82,6 +82,20 @@ def test_get_llm_does_not_override_running_process_environment(
     loader.assert_called_once_with(model_module.ENV_FILE, override=False)
 
 
+def test_validate_model_configuration_does_not_construct_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MODEL_PROVIDER", "deepseek")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-key")
+    constructor = Mock()
+    monkeypatch.setattr(model_module, "ChatDeepSeek", constructor)
+
+    provider = model_module.validate_model_configuration()
+
+    assert provider == "deepseek"
+    constructor.assert_not_called()
+
+
 def test_get_llm_selects_moonshot_and_only_requires_its_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
