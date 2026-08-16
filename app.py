@@ -12,7 +12,7 @@ page = st.navigation(
             default=True,
         ),
         st.Page(
-            "pages/1_prompt_and_skill.py",
+            "app_pages/lesson_1.py",
             title="第一课：苏格拉底智能体与错题整理智能体",
             icon=":material/school:",
         ),

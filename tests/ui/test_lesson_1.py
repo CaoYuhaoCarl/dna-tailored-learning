@@ -9,7 +9,7 @@ from src.schemas import new_agent_result
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-PAGE_PATH = PROJECT_ROOT / "pages" / "1_prompt_and_skill.py"
+PAGE_PATH = PROJECT_ROOT / "app_pages" / "lesson_1.py"
 
 
 def _artifact(stage: str, content: str, digest: str) -> facade_module.LessonArtifact:
