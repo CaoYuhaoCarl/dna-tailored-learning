@@ -132,6 +132,93 @@ def test_get_app_status_reports_ready_without_creating_model(
     }
 
 
+@pytest.mark.parametrize("python_version", ["3.14.0", "3.14.3", "3.14.99"])
+def test_get_app_status_accepts_any_python_3_14_patch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    python_version: str,
+) -> None:
+    for relative_path in facade_module._REQUIRED_APP_FILES:
+        path = tmp_path / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "3.14.3\n" if path.name == ".python-version" else "ok\n",
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(facade_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(
+        facade_module.platform,
+        "python_version",
+        lambda: python_version,
+    )
+    monkeypatch.setattr(
+        facade_module,
+        "validate_model_configuration",
+        lambda: "deepseek",
+    )
+
+    status = facade_module.get_app_status()
+
+    assert status["ready"] is True
+    assert status["errors"] == []
+
+
+@pytest.mark.parametrize("python_version", ["3.13.9", "3.15.0", "unknown"])
+def test_get_app_status_rejects_other_or_invalid_python_versions(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    python_version: str,
+) -> None:
+    for relative_path in facade_module._REQUIRED_APP_FILES:
+        path = tmp_path / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "3.14.3\n" if path.name == ".python-version" else "ok\n",
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(facade_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(
+        facade_module.platform,
+        "python_version",
+        lambda: python_version,
+    )
+    monkeypatch.setattr(
+        facade_module,
+        "validate_model_configuration",
+        lambda: "deepseek",
+    )
+
+    status = facade_module.get_app_status()
+
+    assert status["ready"] is False
+    assert any("Python 3.14.x" in error for error in status["errors"])
+
+
+def test_get_app_status_rejects_invalid_verified_python_version(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    for relative_path in facade_module._REQUIRED_APP_FILES:
+        path = tmp_path / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "invalid\n" if path.name == ".python-version" else "ok\n",
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(facade_module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(facade_module.platform, "python_version", lambda: "3.14.3")
+    monkeypatch.setattr(
+        facade_module,
+        "validate_model_configuration",
+        lambda: "deepseek",
+    )
+
+    status = facade_module.get_app_status()
+
+    assert status["ready"] is False
+    assert any(".python-version" in error for error in status["errors"])
+
+
 def test_get_app_status_explains_missing_configuration_and_files(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -156,7 +243,7 @@ def test_get_app_status_explains_missing_configuration_and_files(
     assert "缺少测试 API Key。" in status["errors"]
     assert "课程运行所需文件不完整。" in status["errors"]
     assert "student/prompt.md" in status["missing_files"]
-    assert any("课程要求 3.14.3" in error for error in status["errors"])
+    assert any("课程要求 Python 3.14.x" in error for error in status["errors"])
 
 
 def _configure_lesson_artifacts(

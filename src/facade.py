@@ -275,11 +275,31 @@ def get_app_status() -> AppStatus:
 
     python_version = platform.python_version()
     errors: list[str] = []
-    if expected_python_version and python_version != expected_python_version:
-        errors.append(
-            "当前 Python 版本为 "
-            f"{python_version}，课程要求 {expected_python_version}。"
-        )
+    if expected_python_version:
+        expected_parts = expected_python_version.split(".")
+        try:
+            expected_series = tuple(int(part) for part in expected_parts[:2])
+        except ValueError:
+            expected_series = ()
+
+        current_parts = python_version.split(".")
+        try:
+            current_series = tuple(int(part) for part in current_parts[:2])
+        except ValueError:
+            current_series = ()
+
+        if len(expected_series) != 2:
+            errors.append(
+                ".python-version 中的已验证 Python 版本无法识别，"
+                "请恢复课程文件。"
+            )
+        elif current_series != expected_series:
+            required_series = f"{expected_series[0]}.{expected_series[1]}.x"
+            errors.append(
+                "当前 Python 版本为 "
+                f"{python_version}，课程要求 Python {required_series}。"
+                f"仓库已验证版本为 {expected_python_version}。"
+            )
 
     model_provider: str | None = None
     try:

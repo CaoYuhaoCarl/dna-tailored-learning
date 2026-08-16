@@ -8,6 +8,24 @@
 
 `.ipynb` 文件仍称为 Notebook，由 JupyterLab 打开和运行。
 
+## 从源码 ZIP 双击启动
+
+该方式支持 Python 3.14.x，电脑需要提前安装 Python，启动脚本不会自动安装或升级 Python。
+
+1. 下载仓库的源码 ZIP，并将整个 ZIP 解压到本地文件夹。
+2. 不要直接在压缩包预览窗口中运行任何文件。
+3. 用 VS Code 等文本编辑器打开解压目录，将 `.env.example` 复制为 `.env`。
+4. 在 `.env` 中选择 `deepseek`、`moonshot` 或 `gemini`，并只填写所选供应商的 API Key。
+5. Windows 双击 `start_windows.bat`，macOS 双击 `start_mac.command`。
+
+首次启动会在项目内创建 `.venv` 并安装 `requirements.txt` 中的依赖，因此需要联网并可能等待几分钟。
+以后启动会复用已经安装的环境，不需要再次执行安装命令。
+启动成功后，课程界面会自动在默认浏览器中打开。
+关闭启动窗口或在窗口中按 `Ctrl+C` 可以停止课程应用。
+
+如果启动失败，窗口会显示修复建议，完整输出保存在 `logs/startup.log`。
+脚本不会显示、复制或上传 `.env` 中的 API Key。
+
 ## 创建开发环境
 
 macOS：
@@ -22,7 +40,7 @@ cp .env.example .env
 Windows：
 
 ```powershell
-py -3.14 -m venv .venv
+py -V:3.14 -m venv .venv
 .venv\Scripts\activate
 python -m pip install -r requirements-dev.txt
 copy .env.example .env

@@ -48,7 +48,7 @@ def render_runtime_status() -> None:
 
     with st.expander("家长修复步骤", expanded=True):
         st.markdown(
-            "1. 确认当前 Python 版本与 `.python-version` 一致。\n"
+            "1. 确认当前 Python 版本为 3.14.x。\n"
             "2. 将 `.env.example` 复制为 `.env`，"
             "填写所选模型供应商的 API Key。\n"
             "3. 如果课程文件缺失，请从原始课程包恢复对应文件。\n"
