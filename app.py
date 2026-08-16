@@ -13,8 +13,13 @@ page = st.navigation(
         ),
         st.Page(
             "pages/1_prompt_and_skill.py",
-            title="第一课：训练学习助手",
+            title="第一课：苏格拉底智能体与错题整理智能体",
             icon=":material/school:",
+        ),
+        st.Page(
+            "app_pages/lesson_2.py",
+            title="第二课：名师智能体与个性化智能体",
+            icon=":material/psychology:",
         ),
     ],
     position="sidebar",

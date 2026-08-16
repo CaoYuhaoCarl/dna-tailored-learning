@@ -109,9 +109,9 @@ with lesson_columns[0]:
 with lesson_columns[1]:
     render_course_card(
         "第二课：让助手学会查证和复盘",
-        "加入知识库和 Workflow，完成有证据的长期学习对话。",
+        "让助手查找知识卡，并根据你的决定完成长期学习复盘。",
         ("v3", "v4"),
         completed_modules,
     )
 
-st.info("第一课已经可以体验，第二课页面将在下一步接入。")
+st.success("两节课都已经可以体验。请从左侧导航选择课程。")

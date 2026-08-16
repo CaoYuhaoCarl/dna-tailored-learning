@@ -28,9 +28,9 @@ STAGE_LABELS = {
     "V2": "第 3 关 · 技能助手",
 }
 STAGE_SELECTOR_LABELS = {
-    "V0": "1 原始",
-    "V1": "2 教学",
-    "V2": "3 技能",
+    "V0": "1 普通AI",
+    "V1": "2 苏格拉底智能体",
+    "V2": "3 错题整理智能体",
 }
 STAGE_SUMMARIES = {
     "V0": "它只有 AI 原本的能力，还没有收到你的教学要求。",
@@ -43,19 +43,19 @@ STAGE_CHALLENGES = {
     "V2": "请它整理一道错题，观察它会不会真的使用技能。",
 }
 STAGE_INTROS = {
-    "V0": "你好，我是还没有经过特别训练的原始助手。你可以先发一道题试试我。",
-    "V1": "你好，我会先阅读你的教学说明书。你可以用刚才的问题测试我。",
-    "V2": "你好，我除了会聊天，还能按需使用整理错题技能。你想让我做什么？",
+    "V0": "你好，我是一个普通AI助手。",
+    "V1": "你好，同学。我未来的身份就由你来定了👻。",
+    "V2": "你好，同学。我除了能陪你聊天，还能帮你整理错题，帮你省出时间玩🎮。",
 }
 STAGE_CHAT_PLACEHOLDERS = {
-    "V0": "和原始助手聊聊，按发送键后它才会回答",
-    "V1": "把问题发给教学助手",
-    "V2": "把问题或整理要求发给技能助手",
+    "V0": "和原始普通AI聊天",
+    "V1": "发问题给苏格拉底",
+    "V2": "把你的错题发过来，帮你整理",
 }
 TRAINING_COPY = {
     "V1": {
-        "expander": "训练教学助手",
-        "heading": "给助手一张教学说明书",
+        "expander": "苏格拉底身份定义",
+        "heading": "苏格拉底身份说明",
         "explanation": (
             "Prompt 就像写给新老师的说明书。"
             "你可以告诉它扮演什么角色、怎样提问，以及哪些事不能做。"
@@ -64,8 +64,8 @@ TRAINING_COPY = {
         "editor_label": "写给教学助手的说明书",
     },
     "V2": {
-        "expander": "训练技能助手",
-        "heading": "给助手一份做事步骤",
+        "expander": "错题整理智能体技能卡",
+        "heading": "给智能体一份做事步骤",
         "explanation": (
             "Skill 像一张任务卡。"
             "它告诉助手什么时候使用这项能力，以及完成任务时要按什么步骤做。"
@@ -217,7 +217,7 @@ completed_count = sum(stage_name.lower() in completed_modules for stage_name in 
 with st.sidebar:
     st.header("第一课")
     st.caption("训练你的学习助手")
-    st.write("选择一个关卡，中间的聊天窗口会切换到对应的助手。")
+    # st.write("选择一个关卡，中间的聊天窗口会切换到对应的助手。")
 
     stage = st.segmented_control(
         "选择一关",
@@ -281,7 +281,7 @@ with st.sidebar:
 
                 with st.container(horizontal=True):
                     save_clicked = st.button(
-                        "保存给助手",
+                        "保存",
                         type="primary",
                         icon=":material/save:",
                         key=f"lesson1_save_{stage}",

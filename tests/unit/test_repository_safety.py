@@ -344,10 +344,26 @@ def test_streamlit_home_does_not_assemble_or_call_models() -> None:
     assert "StateGraph" not in source
     assert "create_agent" not in source
     assert "chat_v4" not in source
+    assert '"app_pages/lesson_2.py"' in source
 
 
 def test_streamlit_lesson_1_uses_facade_without_agent_assembly() -> None:
     source = (PROJECT_ROOT / "pages" / "1_prompt_and_skill.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "from src.facade import" in source
+    assert "get_llm" not in source
+    assert "StateGraph" not in source
+    assert "create_agent" not in source
+    assert "from src.agents" not in source
+    assert "write_text(" not in source
+    assert "st.chat_input(" in source
+    assert "st.form(" not in source
+
+
+def test_streamlit_lesson_2_uses_facade_without_agent_assembly() -> None:
+    source = (PROJECT_ROOT / "app_pages" / "lesson_2.py").read_text(
         encoding="utf-8"
     )
 
