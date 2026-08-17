@@ -8,6 +8,7 @@ from datetime import datetime
 from hashlib import sha256
 import os
 from pathlib import Path
+import platform
 import subprocess
 import sys
 from typing import TextIO
@@ -22,6 +23,8 @@ REQUIRED_FILES = (
     "src/model.py",
 )
 REQUIREMENTS_MARKER = ".requirements.sha256"
+DEFAULT_PIP_INDEX_URL = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+MINIMUM_MACOS_VERSION = (12, 0)
 DEPENDENCY_IMPORT_CHECK = "import streamlit; import src.facade"
 APPLICATION_CHECK = """
 from src.facade import get_app_status
@@ -70,6 +73,24 @@ def validate_required_files(project_root: Path) -> None:
     )
 
 
+def validate_supported_platform(platform_name: str, macos_version: str) -> None:
+    """拒绝不支持 Python 3.14 课程依赖的旧版 macOS。"""
+
+    if platform_name.lower() != "darwin":
+        return
+
+    version_series = parse_python_series(macos_version)
+    if version_series is None:
+        raise LaunchError(
+            "无法识别当前 macOS 版本。课程需要 macOS 12 或更高版本。"
+        )
+    if version_series < MINIMUM_MACOS_VERSION:
+        raise LaunchError(
+            f"当前系统为 macOS {macos_version}，"
+            "课程需要 macOS 12 或更高版本。"
+        )
+
+
 def requirements_digest(requirements_path: Path) -> str:
     """返回依赖文件的稳定摘要。"""
 
@@ -97,7 +118,7 @@ def _emit(log: TextIO, message: str) -> None:
 def _emit_repair_steps(log: TextIO, log_path: Path) -> None:
     _emit(log, "修复步骤：")
     _emit(log, "1. 确认源码 ZIP 已完整解压，并已手动创建和填写 .env。")
-    _emit(log, "2. 首次安装依赖时保持网络连接，然后重新启动。")
+    _emit(log, "2. 首次安装依赖时需访问可用的 Python 包镜像，默认使用清华 TUNA。")
     _emit(log, "3. 如果提示 .venv 损坏，请删除项目中的 .venv 文件夹后重试。")
     _emit(log, f"4. 如果仍然失败，请保留此窗口并查看日志：{log_path}")
 
@@ -238,7 +259,15 @@ def _install_dependencies(
     environment: Mapping[str, str],
 ) -> None:
     run_logged_command(
-        [str(python_path), "-m", "pip", "install", "-r", str(requirements_path)],
+        [
+            str(python_path),
+            "-m",
+            "pip",
+            "install",
+            "--only-binary=:all:",
+            "-r",
+            str(requirements_path),
+        ],
         cwd=project_root,
         log=log,
         description="安装课程运行依赖",
@@ -365,6 +394,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
         return 1
 
     environment = os.environ.copy()
+    if not environment.get("PIP_INDEX_URL", "").strip():
+        environment["PIP_INDEX_URL"] = DEFAULT_PIP_INDEX_URL
     environment["PYTHONUTF8"] = "1"
     environment["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
     environment["PIP_NO_INPUT"] = "1"
@@ -375,6 +406,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
             validate_required_files(project_root)
             verified_version, expected_series = _expected_python(project_root)
             _validate_host_python(verified_version, expected_series)
+            validate_supported_platform(sys.platform, platform.mac_ver()[0])
             python_path = prepare_environment(
                 project_root,
                 expected_series,

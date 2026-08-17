@@ -10,15 +10,24 @@
 
 ## 从源码 ZIP 双击启动
 
-该方式支持 Python 3.14.x，电脑需要提前安装 Python，启动脚本不会自动安装或升级 Python。
+该方式支持 Python 3.14.x，macOS 需要 12 或更高版本。
+电脑需要提前安装 Python，启动脚本不会自动安装或升级 Python。
 
 1. 下载仓库的源码 ZIP，并将整个 ZIP 解压到本地文件夹。
 2. 不要直接在压缩包预览窗口中运行任何文件。
 3. 用 VS Code 等文本编辑器打开解压目录，将 `.env.example` 复制为 `.env`。
 4. 在 `.env` 中选择 `deepseek`、`moonshot` 或 `gemini`，并只填写所选供应商的 API Key。
+   中国大陆学生应选择 `deepseek` 或 `moonshot`。
 5. Windows 双击 `start_windows.bat`，macOS 双击 `start_mac.command`。
 
-首次启动会在项目内创建 `.venv` 并安装 `requirements.txt` 中的依赖，因此需要联网并可能等待几分钟。
+首次启动会在项目内创建 `.venv`，并默认通过[清华 TUNA PyPI 镜像](https://mirrors.tuna.tsinghua.edu.cn/help/pypi/)安装 `requirements.txt` 中的依赖，因此需要能访问普通互联网并可能等待几分钟。
+启动器只安装预编译依赖包，不要求学生电脑配置本地编译工具。
+如果需要使用其他 Python 包索引，可以设置标准环境变量 `PIP_INDEX_URL`，启动器会保留该值而不使用默认镜像。
+双击启动时应将该变量设为系统环境变量；也可以在设置变量的同一个 Terminal 或命令提示符窗口中运行对应启动入口。
+DeepSeek 和 Moonshot/Kimi 路径的设计不依赖 VPN，但首次安装仍需直连 TUNA，真实问答仍需直连所选模型的 API 服务。
+不同学校或家庭网络的 DNS、防火墙和证书策略可能不同，正式上课前仍需在实际网络中验收。
+Gemini 代码选项继续保留，但不是学生课程选项。
+它仅供位于[官方支持地区](https://ai.google.dev/gemini-api/docs/available-regions)且符合[年龄条款](https://ai.google.dev/gemini-api/terms)的成人开发者或教师在课程外测试。
 以后启动会复用已经安装的环境，不需要再次执行安装命令。
 启动成功后，课程界面会自动在默认浏览器中打开。
 关闭启动窗口或在窗口中按 `Ctrl+C` 可以停止课程应用。
@@ -29,6 +38,8 @@
 ## 创建开发环境
 
 macOS：
+
+需要 macOS 12 或更高版本。
 
 ```bash
 python3.14 -m venv .venv
@@ -75,6 +86,14 @@ python scripts/check_v0.py
 ```bash
 RUN_MODEL_INTEGRATION=1 python -m pytest -m integration
 ```
+
+发布前单独验证 DeepSeek V4 Flash 的真实连通性：
+
+```bash
+RUN_DEEPSEEK_INTEGRATION=1 python -m pytest tests/integration/test_v0_connectivity.py -k deepseek_v4_flash -q
+```
+
+该命令只在显式设置开关后发起一次真实模型调用，失败时可能按配置自动重试，并需要 `.env` 或系统环境中存在 `DEEPSEEK_API_KEY`。
 
 ## V1 Agent Prompt
 

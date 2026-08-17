@@ -84,6 +84,28 @@ def test_requirements_digest_controls_dependency_reuse(tmp_path: Path) -> None:
     assert launch_app.dependencies_need_install(requirements, marker) is True
 
 
+@pytest.mark.parametrize(
+    "macos_version",
+    ["12.0", "12.7.6", "15.6.1", "26.0"],
+)
+def test_supported_platform_accepts_macos_12_or_newer(
+    macos_version: str,
+) -> None:
+    launch_app.validate_supported_platform("darwin", macos_version)
+
+
+def test_supported_platform_ignores_non_macos() -> None:
+    launch_app.validate_supported_platform("win32", "unknown")
+
+
+@pytest.mark.parametrize("macos_version", ["11.7.10", "unknown", ""])
+def test_supported_platform_rejects_unsupported_or_unknown_macos(
+    macos_version: str,
+) -> None:
+    with pytest.raises(launch_app.LaunchError, match="macOS 12"):
+        launch_app.validate_supported_platform("darwin", macos_version)
+
+
 def test_existing_invalid_venv_is_not_deleted(tmp_path: Path) -> None:
     venv_path = tmp_path / ".venv"
     venv_path.mkdir()
@@ -108,7 +130,7 @@ def test_fresh_environment_creates_venv_and_installs_dependencies(
     requirements = tmp_path / "requirements.txt"
     requirements.write_text("streamlit==1.60.0\n", encoding="utf-8")
     python_path = tmp_path / ".venv" / "bin" / "python"
-    calls: list[str] = []
+    calls: list[tuple[str, list[str], dict[str, str]]] = []
     monkeypatch.setattr(launch_app, "_venv_python", lambda _root: python_path)
     monkeypatch.setattr(
         launch_app,
@@ -116,8 +138,8 @@ def test_fresh_environment_creates_venv_and_installs_dependencies(
         lambda *args, **kwargs: None,
     )
 
-    def record_command(*args, description: str, **kwargs) -> None:
-        calls.append(description)
+    def record_command(command, *, description: str, environment, **kwargs) -> None:
+        calls.append((description, list(command), dict(environment)))
         if description == "创建项目虚拟环境":
             python_path.parent.mkdir(parents=True)
 
@@ -127,16 +149,22 @@ def test_fresh_environment_creates_venv_and_installs_dependencies(
         tmp_path,
         (3, 14),
         log=StringIO(),
-        environment={},
+        environment={"PIP_INDEX_URL": launch_app.DEFAULT_PIP_INDEX_URL},
     )
 
     assert selected_python == python_path
-    assert calls == [
+    assert [description for description, _, _ in calls] == [
         "创建项目虚拟环境",
         "安装课程运行依赖",
         "检查依赖兼容性",
         "检查核心模块",
     ]
+    _, install_command, install_environment = calls[1]
+    assert "--only-binary=:all:" in install_command
+    assert (
+        install_environment["PIP_INDEX_URL"]
+        == launch_app.DEFAULT_PIP_INDEX_URL
+    )
     marker = tmp_path / ".venv" / launch_app.REQUIREMENTS_MARKER
     assert marker.read_text(encoding="utf-8").strip() == (
         launch_app.requirements_digest(requirements)
@@ -288,6 +316,93 @@ def test_main_does_not_copy_api_key_into_failure_log(
     assert "MODEL_PROVIDER 配置无效" in log
     assert "修复步骤" in log
     assert secret not in log
+
+
+@pytest.mark.parametrize(
+    ("configured_index", "expected_index"),
+    [
+        (None, launch_app.DEFAULT_PIP_INDEX_URL),
+        (
+            "https://mirror.example.test/simple",
+            "https://mirror.example.test/simple",
+        ),
+    ],
+)
+def test_main_defaults_to_tuna_and_preserves_pip_index_override(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    configured_index: str | None,
+    expected_index: str,
+) -> None:
+    for relative_path in launch_app.REQUIRED_FILES:
+        path = tmp_path / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "3.14.3\n" if relative_path == ".python-version" else "ok\n",
+            encoding="utf-8",
+        )
+
+    if configured_index is None:
+        monkeypatch.delenv("PIP_INDEX_URL", raising=False)
+    else:
+        monkeypatch.setenv("PIP_INDEX_URL", configured_index)
+
+    captured_environment: dict[str, str] = {}
+
+    def capture_environment(*args, environment, **kwargs) -> Path:
+        captured_environment.update(environment)
+        return Path(sys.executable)
+
+    monkeypatch.setattr(launch_app, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(launch_app, "_validate_host_python", lambda *args: None)
+    monkeypatch.setattr(
+        launch_app,
+        "validate_supported_platform",
+        lambda *args: None,
+    )
+    monkeypatch.setattr(launch_app, "prepare_environment", capture_environment)
+    monkeypatch.setattr(launch_app, "run_logged_command", lambda *args, **kwargs: None)
+
+    exit_code = launch_app.main(["--check-only"])
+
+    assert exit_code == 0
+    assert captured_environment["PIP_INDEX_URL"] == expected_index
+
+
+def test_main_rejects_old_macos_before_preparing_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    for relative_path in launch_app.REQUIRED_FILES:
+        path = tmp_path / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "3.14.3\n" if relative_path == ".python-version" else "ok\n",
+            encoding="utf-8",
+        )
+
+    prepare_environment_called = False
+
+    def reject_macos(*args) -> None:
+        raise launch_app.LaunchError("课程需要 macOS 12 或更高版本。")
+
+    def record_prepare(*args, **kwargs) -> Path:
+        nonlocal prepare_environment_called
+        prepare_environment_called = True
+        return Path(sys.executable)
+
+    monkeypatch.setattr(launch_app, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(launch_app, "_validate_host_python", lambda *args: None)
+    monkeypatch.setattr(launch_app, "validate_supported_platform", reject_macos)
+    monkeypatch.setattr(launch_app, "prepare_environment", record_prepare)
+
+    exit_code = launch_app.main(["--check-only"])
+
+    assert exit_code == 1
+    assert prepare_environment_called is False
+    assert not (tmp_path / ".venv").exists()
+    log = (tmp_path / "logs" / "startup.log").read_text(encoding="utf-8")
+    assert "macOS 12" in log
 
 
 def test_launch_scripts_have_expected_entrypoints_and_permissions() -> None:

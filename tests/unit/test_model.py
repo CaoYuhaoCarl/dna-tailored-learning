@@ -61,11 +61,12 @@ def test_get_llm_defaults_to_deepseek(monkeypatch: pytest.MonkeyPatch) -> None:
     model_module.get_llm()
 
     constructor.assert_called_once_with(
-        model="deepseek-chat",
+        model="deepseek-v4-flash",
         temperature=0.0,
         timeout=45.0,
         max_retries=2,
         api_key="deepseek-key",
+        extra_body={"thinking": {"type": "disabled"}},
     )
 
 
@@ -101,7 +102,7 @@ def test_get_llm_selects_moonshot_and_only_requires_its_key(
 ) -> None:
     monkeypatch.setenv("MODEL_PROVIDER", "moonshot")
     monkeypatch.setenv("MOONSHOT_API_KEY", "moonshot-key")
-    monkeypatch.setenv("MODEL_NAME", "deepseek-chat")
+    monkeypatch.setenv("MODEL_NAME", "ignored-model")
     monkeypatch.setenv("MODEL_TEMPERATURE", "0")
     constructor = Mock(return_value=object())
     monkeypatch.setattr(model_module, "ChatOpenAI", constructor)
@@ -124,7 +125,7 @@ def test_get_llm_selects_gemini_and_only_requires_its_key(
 ) -> None:
     monkeypatch.setenv("MODEL_PROVIDER", "GEMINI")
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
-    monkeypatch.setenv("MODEL_NAME", "deepseek-chat")
+    monkeypatch.setenv("MODEL_NAME", "ignored-model")
     monkeypatch.setenv("MODEL_TEMPERATURE", "0")
     constructor = Mock(return_value=object())
     monkeypatch.setattr(model_module, "ChatGoogleGenerativeAI", constructor)
@@ -142,7 +143,7 @@ def test_get_llm_selects_gemini_and_only_requires_its_key(
 @pytest.mark.parametrize(
     ("provider", "key_name", "expected_name"),
     [
-        ("deepseek", "DEEPSEEK_API_KEY", "deepseek-chat"),
+        ("deepseek", "DEEPSEEK_API_KEY", "deepseek-v4-flash"),
         ("moonshot", "MOONSHOT_API_KEY", "kimi-k2.6"),
         ("gemini", "GEMINI_API_KEY", "gemini-3.6-flash"),
     ],
@@ -175,11 +176,12 @@ def test_get_llm_uses_shared_timeout_and_retry_settings(
     model_module.get_llm()
 
     constructor.assert_called_once_with(
-        model="deepseek-chat",
+        model="deepseek-v4-flash",
         temperature=0.2,
         timeout=30.0,
         max_retries=3,
         api_key="test-key",
+        extra_body={"thinking": {"type": "disabled"}},
     )
 
 
