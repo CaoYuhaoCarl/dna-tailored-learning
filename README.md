@@ -8,9 +8,38 @@
 
 `.ipynb` 文件仍称为 Notebook，由 JupyterLab 打开和运行。
 
+## 从源码 ZIP 双击启动
+
+该方式支持 Python 3.14.x，macOS 需要 12 或更高版本。
+电脑需要提前安装 Python，启动脚本不会自动安装或升级 Python。
+
+1. 下载仓库的源码 ZIP，并将整个 ZIP 解压到本地文件夹。
+2. 不要直接在压缩包预览窗口中运行任何文件。
+3. Windows 双击 `start_windows.bat`，macOS 双击 `start_mac.command`。
+4. 浏览器打开后，在首页展开“模型配置”。
+5. 选择 DeepSeek、Kimi 或 Gemini，并填写对应的 API Key。
+6. 点击“保存并测试连接”，看到成功提示后即可开始课程。
+
+首次启动会在项目内创建 `.venv`，并默认通过[清华 TUNA PyPI 镜像](https://mirrors.tuna.tsinghua.edu.cn/help/pypi/)安装 `requirements.txt` 中的依赖，因此需要能访问普通互联网并可能等待几分钟。
+启动器只安装预编译依赖包，不要求学生电脑配置本地编译工具。
+如果需要使用其他 Python 包索引，可以设置标准环境变量 `PIP_INDEX_URL`，启动器会保留该值而不使用默认镜像。
+双击启动时应将该变量设为系统环境变量；也可以在设置变量的同一个 Terminal 或命令提示符窗口中运行对应启动入口。
+DeepSeek 和 Moonshot/Kimi 路径的设计不依赖 VPN，但首次安装仍需直连 TUNA，真实问答仍需直连所选模型的 API 服务。
+不同学校或家庭网络的 DNS、防火墙和证书策略可能不同，正式上课前仍需在实际网络中验收。
+Gemini 代码选项继续保留，但不是学生课程选项。
+它仅供位于[官方支持地区](https://ai.google.dev/gemini-api/docs/available-regions)且符合[年龄条款](https://ai.google.dev/gemini-api/terms)的成人开发者或教师在课程外测试。
+以后启动会复用已经安装的环境，不需要再次执行安装命令。
+启动成功后，课程界面会自动在默认浏览器中打开。
+关闭启动窗口或在窗口中按 `Ctrl+C` 可以停止课程应用。
+
+如果启动失败，窗口会显示修复建议，完整输出保存在 `logs/startup.log`。
+首页会将 API Key 保存到本机的 `.env`，但不会在页面或启动日志中回显密钥。
+
 ## 创建开发环境
 
 macOS：
+
+需要 macOS 12 或更高版本。
 
 ```bash
 python3.14 -m venv .venv
@@ -22,19 +51,20 @@ cp .env.example .env
 Windows：
 
 ```powershell
-py -3.14 -m venv .venv
+py -V:3.14 -m venv .venv
 .venv\Scripts\activate
 python -m pip install -r requirements-dev.txt
 copy .env.example .env
 ```
 
-打开 `.env`，将 `MODEL_PROVIDER` 设置为 `deepseek`、`moonshot` 或 `gemini`，再填写对应的 API Key。
+开发环境也可以直接在 Streamlit 首页配置模型。
+如需手工配置，打开 `.env`，将 `MODEL_PROVIDER` 设置为 `deepseek`、`moonshot` 或 `gemini`，再填写对应的 API Key。
 
 三个 Key 可以同时保存在 `.env` 中，程序只检查 `MODEL_PROVIDER` 选中的一项。
 
 V0 到 V4 共用该设置，不需要为每个 Agent 单独配置模型。
 
-修改 `MODEL_PROVIDER` 后，必须重启 Jupyter Kernel 或重新启动程序，再重新运行模型初始化单元格。
+首页保存的模型配置会立即生效，无需重启 Streamlit。
 
 不要把真实 API Key 写入源码或 Notebook。
 
@@ -57,6 +87,14 @@ python scripts/check_v0.py
 ```bash
 RUN_MODEL_INTEGRATION=1 python -m pytest -m integration
 ```
+
+发布前单独验证 DeepSeek V4 Flash 的真实连通性：
+
+```bash
+RUN_DEEPSEEK_INTEGRATION=1 python -m pytest tests/integration/test_v0_connectivity.py -k deepseek_v4_flash -q
+```
+
+该命令只在显式设置开关后发起一次真实模型调用，失败时可能按配置自动重试，并需要 `.env` 或系统环境中存在 `DEEPSEEK_API_KEY`。
 
 ## V1 Agent Prompt
 

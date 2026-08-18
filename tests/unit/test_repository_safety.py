@@ -2,12 +2,23 @@ import ast
 import json
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 from src.retrieval import discover_knowledge_cards
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_project_metadata_declares_supported_python_series() -> None:
+    metadata = tomllib.loads(
+        (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )["project"]
+
+    assert metadata["name"] == "agent-course-teen-v1"
+    assert metadata["version"] == "1.0.0"
+    assert metadata["requires-python"] == ">=3.14,<3.15"
 
 
 def test_sensitive_files_are_ignored() -> None:

@@ -4,7 +4,14 @@ from uuid import uuid4
 
 import streamlit as st
 
-from src.facade import get_app_status
+from src.facade import (
+    AppStatus,
+    ModelConfigurationError,
+    get_app_status,
+    get_model_configuration,
+    save_model_configuration,
+    test_model_connection,
+)
 from src.progress import ProgressDataError, default_progress, load_progress
 
 
@@ -13,6 +20,12 @@ st.set_page_config(
     page_icon=":material/explore:",
     layout="wide",
 )
+
+PROVIDER_LABELS = {
+    "deepseek": "DeepSeek",
+    "moonshot": "Kimi",
+    "gemini": "Gemini",
+}
 
 
 def initialize_session_state() -> None:
@@ -29,17 +42,96 @@ def initialize_session_state() -> None:
             st.session_state.progress_error = str(exc)
 
 
-def render_runtime_status() -> None:
+def render_model_configuration(status: AppStatus) -> AppStatus:
+    """展示本机模型配置表单，且永不回显已保存的 Key。"""
+
+    try:
+        configuration = get_model_configuration()
+        configuration_error = None
+    except ModelConfigurationError as exc:
+        configuration = {
+            "provider": "deepseek",
+            "configured_providers": [],
+        }
+        configuration_error = str(exc)
+
+    configured_labels = [
+        PROVIDER_LABELS[provider]
+        for provider in configuration["configured_providers"]
+    ]
+    with st.expander("模型配置", expanded=not status["model_ready"]):
+        st.write("选择模型供应商，再填写该供应商的 API Key。")
+        st.caption(
+            "API Key 只保存在这台电脑的 .env 文件中，"
+            "页面不会显示已保存的 Key。"
+        )
+        if configured_labels:
+            st.caption("已保存：" + "、".join(configured_labels))
+        if configuration_error is not None:
+            st.warning(configuration_error)
+        elif status["model_error"] is not None:
+            st.warning(status["model_error"])
+
+        provider_options = list(PROVIDER_LABELS)
+        provider_index = provider_options.index(configuration["provider"])
+        with st.form("model_configuration", clear_on_submit=True):
+            provider = st.selectbox(
+                "模型供应商",
+                provider_options,
+                index=provider_index,
+                format_func=PROVIDER_LABELS.__getitem__,
+            )
+            api_key = st.text_input(
+                "API Key",
+                type="password",
+                autocomplete="new-password",
+                placeholder="已保存时可留空",
+                help="留空会继续使用该供应商已保存的 Key。",
+            )
+            st.caption(
+                "中国大陆学员建议使用 DeepSeek 或 Kimi。"
+                "Gemini 仅供符合官方地区和年龄要求的"
+                "教师或开发者测试。"
+            )
+            submitted = st.form_submit_button("保存并测试连接")
+
+        if submitted:
+            try:
+                save_model_configuration(provider, api_key)
+            except ModelConfigurationError as exc:
+                st.error(f"配置未保存。{exc}")
+            else:
+                connection = test_model_connection()
+                if connection["error"]:
+                    st.error(
+                        "配置已保存，但连接测试失败。"
+                        f"{connection['error']}"
+                    )
+                else:
+                    st.success("配置已保存，连接测试成功。")
+                status = get_app_status()
+
+    return status
+
+
+def render_runtime_status(status: AppStatus) -> None:
     """展示配置状态和可以直接执行的修复步骤。"""
 
-    status = get_app_status()
-    if status["ready"]:
+    if status["runtime_ready"] and status["model_ready"]:
         provider = status["model_provider"] or "未识别"
-        st.success(f"运行环境已就绪，当前模型供应商：{provider}。")
+        provider_label = PROVIDER_LABELS.get(provider, provider)
+        st.success(
+            "课程文件和模型配置已就绪，"
+            f"当前模型供应商：{provider_label}。"
+        )
+        return
+
+    if status["runtime_ready"]:
+        st.info("课程程序已就绪。请在上方完成模型配置。")
         return
 
     st.error("运行环境还差一步，请先完成下面的修复。")
-    for error in status["errors"]:
+    for error in status["runtime_errors"]:
         st.write(f"- {error}")
     if status["missing_files"]:
         st.write("缺少的课程文件：")
@@ -48,11 +140,9 @@ def render_runtime_status() -> None:
 
     with st.expander("家长修复步骤", expanded=True):
         st.markdown(
-            "1. 确认当前 Python 版本与 `.python-version` 一致。\n"
-            "2. 将 `.env.example` 复制为 `.env`，"
-            "填写所选模型供应商的 API Key。\n"
-            "3. 如果课程文件缺失，请从原始课程包恢复对应文件。\n"
-            "4. 保存后重新启动 Streamlit。"
+            "1. 确认当前 Python 版本为 3.14.x。\n"
+            "2. 如果课程文件缺失，请从原始课程包恢复对应文件。\n"
+            "3. 恢复文件后重新启动 Streamlit。"
         )
 
 
@@ -89,7 +179,9 @@ if st.session_state.progress_error:
         f"原因：{st.session_state.progress_error}"
     )
 
-render_runtime_status()
+app_status = get_app_status()
+app_status = render_model_configuration(app_status)
+render_runtime_status(app_status)
 
 lesson_names = {"lesson_1": "第一课", "lesson_2": "第二课"}
 metric_columns = st.columns(3)

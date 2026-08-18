@@ -19,7 +19,13 @@ from src.artifacts import (
     read_markdown,
     read_skill,
 )
-from src.model import ModelConfigurationError, validate_model_configuration
+from src.model import (
+    ModelConfigurationError,
+    ModelConfigurationSummary,
+    get_model_configuration_summary as _get_model_configuration_summary,
+    save_model_configuration as _save_model_configuration,
+    validate_model_configuration,
+)
 from src.schemas import AgentResult, ChatMessage, new_agent_result
 from src.workflow import chat_v4 as _chat_v4
 
@@ -28,10 +34,14 @@ class AppStatus(TypedDict):
     """首页展示所需的只读运行状态。"""
 
     ready: bool
+    runtime_ready: bool
+    model_ready: bool
     python_version: str
     expected_python_version: str | None
     model_provider: str | None
     missing_files: list[str]
+    runtime_errors: list[str]
+    model_error: str | None
     errors: list[str]
 
 
@@ -274,30 +284,82 @@ def get_app_status() -> AppStatus:
             expected_python_version = None
 
     python_version = platform.python_version()
-    errors: list[str] = []
-    if expected_python_version and python_version != expected_python_version:
-        errors.append(
-            "当前 Python 版本为 "
-            f"{python_version}，课程要求 {expected_python_version}。"
-        )
+    runtime_errors: list[str] = []
+    if expected_python_version:
+        expected_parts = expected_python_version.split(".")
+        try:
+            expected_series = tuple(int(part) for part in expected_parts[:2])
+        except ValueError:
+            expected_series = ()
+
+        current_parts = python_version.split(".")
+        try:
+            current_series = tuple(int(part) for part in current_parts[:2])
+        except ValueError:
+            current_series = ()
+
+        if len(expected_series) != 2:
+            runtime_errors.append(
+                ".python-version 中的已验证 Python 版本无法识别，"
+                "请恢复课程文件。"
+            )
+        elif current_series != expected_series:
+            required_series = f"{expected_series[0]}.{expected_series[1]}.x"
+            runtime_errors.append(
+                "当前 Python 版本为 "
+                f"{python_version}，课程要求 Python {required_series}。"
+                f"仓库已验证版本为 {expected_python_version}。"
+            )
 
     model_provider: str | None = None
+    model_error: str | None = None
     try:
         model_provider = validate_model_configuration()
     except ModelConfigurationError as exc:
-        errors.append(str(exc))
+        model_error = str(exc)
 
     if missing_files:
-        errors.append("课程运行所需文件不完整。")
+        runtime_errors.append("课程运行所需文件不完整。")
+
+    runtime_ready = not runtime_errors
+    model_ready = model_error is None
+    errors = list(runtime_errors)
+    if model_error is not None:
+        errors.append(model_error)
 
     return {
-        "ready": not errors,
+        "ready": runtime_ready and model_ready,
+        "runtime_ready": runtime_ready,
+        "model_ready": model_ready,
         "python_version": python_version,
         "expected_python_version": expected_python_version,
         "model_provider": model_provider,
         "missing_files": missing_files,
+        "runtime_errors": runtime_errors,
+        "model_error": model_error,
         "errors": errors,
     }
+
+
+def get_model_configuration() -> ModelConfigurationSummary:
+    """返回不包含 API Key 的模型配置摘要。"""
+
+    return _get_model_configuration_summary()
+
+
+def save_model_configuration(
+    provider: str,
+    api_key: str,
+) -> ModelConfigurationSummary:
+    """保存首页模型配置，但不发起连接测试。"""
+
+    return _save_model_configuration(provider, api_key)
+
+
+def test_model_connection() -> AgentResult:
+    """使用 V0 发起一次最小真实模型连接测试。"""
+
+    return invoke_v0("请只回复：连接成功")
 
 
 def chat_v4(message: str, thread_id: str) -> AgentResult:
