@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -101,6 +102,38 @@ def test_chat_v4_delegates_to_workflow(monkeypatch: pytest.MonkeyPatch) -> None:
     assert received == ("继续", "student-1")
 
 
+def test_model_configuration_facade_never_adds_secret_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    summary: facade_module.ModelConfigurationSummary = {
+        "provider": "moonshot",
+        "configured_providers": ["deepseek", "moonshot"],
+    }
+    reader = Mock(return_value=summary)
+    saver = Mock(return_value=summary)
+    monkeypatch.setattr(facade_module, "_get_model_configuration_summary", reader)
+    monkeypatch.setattr(facade_module, "_save_model_configuration", saver)
+
+    assert facade_module.get_model_configuration() is summary
+    assert facade_module.save_model_configuration("moonshot", "secret") is summary
+    assert "secret" not in str(summary)
+    reader.assert_called_once_with()
+    saver.assert_called_once_with("moonshot", "secret")
+
+
+def test_model_connection_uses_minimal_v0_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = new_agent_result("V0", text="连接成功")
+    invoke_v0 = Mock(return_value=expected)
+    monkeypatch.setattr(facade_module, "invoke_v0", invoke_v0)
+
+    result = facade_module.test_model_connection()
+
+    assert result is expected
+    invoke_v0.assert_called_once_with("请只回复：连接成功")
+
+
 def test_get_app_status_reports_ready_without_creating_model(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -124,10 +157,14 @@ def test_get_app_status_reports_ready_without_creating_model(
 
     assert status == {
         "ready": True,
+        "runtime_ready": True,
+        "model_ready": True,
         "python_version": "3.14.3",
         "expected_python_version": "3.14.3",
         "model_provider": "deepseek",
         "missing_files": [],
+        "runtime_errors": [],
+        "model_error": None,
         "errors": [],
     }
 
@@ -160,6 +197,8 @@ def test_get_app_status_accepts_any_python_3_14_patch(
     status = facade_module.get_app_status()
 
     assert status["ready"] is True
+    assert status["runtime_ready"] is True
+    assert status["model_ready"] is True
     assert status["errors"] == []
 
 
@@ -191,6 +230,8 @@ def test_get_app_status_rejects_other_or_invalid_python_versions(
     status = facade_module.get_app_status()
 
     assert status["ready"] is False
+    assert status["runtime_ready"] is False
+    assert status["model_ready"] is True
     assert any("Python 3.14.x" in error for error in status["errors"])
 
 
@@ -216,6 +257,8 @@ def test_get_app_status_rejects_invalid_verified_python_version(
     status = facade_module.get_app_status()
 
     assert status["ready"] is False
+    assert status["runtime_ready"] is False
+    assert status["model_ready"] is True
     assert any(".python-version" in error for error in status["errors"])
 
 
@@ -239,9 +282,13 @@ def test_get_app_status_explains_missing_configuration_and_files(
     status = facade_module.get_app_status()
 
     assert status["ready"] is False
+    assert status["runtime_ready"] is False
+    assert status["model_ready"] is False
     assert status["model_provider"] is None
+    assert status["model_error"] == "缺少测试 API Key。"
     assert "缺少测试 API Key。" in status["errors"]
     assert "课程运行所需文件不完整。" in status["errors"]
+    assert "课程运行所需文件不完整。" in status["runtime_errors"]
     assert "student/prompt.md" in status["missing_files"]
     assert any("课程要求 Python 3.14.x" in error for error in status["errors"])
 

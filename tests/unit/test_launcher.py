@@ -36,17 +36,18 @@ def test_required_file_check_explains_that_zip_must_be_extracted(
     with pytest.raises(launch_app.LaunchError, match="完整解压") as error:
         launch_app.validate_required_files(tmp_path)
 
-    assert ".env" in str(error.value)
+    assert ".env.example" in str(error.value)
     assert "requirements.txt" in str(error.value)
 
 
-def test_main_rejects_missing_env_before_creating_venv(
+def test_main_allows_missing_env_for_frontend_configuration(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    for relative_path in launch_app.REQUIRED_FILES:
-        if relative_path == ".env":
-            continue
+    required_files = (set(launch_app.REQUIRED_FILES) - {".env"}) | {
+        ".env.example"
+    }
+    for relative_path in required_files:
         path = tmp_path / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
@@ -54,14 +55,32 @@ def test_main_rejects_missing_env_before_creating_venv(
             encoding="utf-8",
         )
     monkeypatch.setattr(launch_app, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(launch_app, "_validate_host_python", lambda *args: None)
+    monkeypatch.setattr(
+        launch_app,
+        "validate_supported_platform",
+        lambda *args: None,
+    )
+    monkeypatch.setattr(
+        launch_app,
+        "prepare_environment",
+        lambda *args, **kwargs: Path(sys.executable),
+    )
+    monkeypatch.setattr(launch_app, "run_logged_command", lambda *args, **kwargs: None)
 
     exit_code = launch_app.main(["--check-only"])
 
-    assert exit_code == 1
-    assert not (tmp_path / ".venv").exists()
+    assert exit_code == 0
+    assert ".env" not in launch_app.REQUIRED_FILES
+    assert ".env.example" in launch_app.REQUIRED_FILES
+    assert not (tmp_path / ".env").exists()
     log = (tmp_path / "logs" / "startup.log").read_text(encoding="utf-8")
-    assert "缺少文件" in log
-    assert ".env" in log
+    assert "启动检查全部通过" in log
+
+
+def test_application_check_does_not_block_missing_model_configuration() -> None:
+    assert 'status["runtime_ready"]' in launch_app.APPLICATION_CHECK
+    assert 'if not status["ready"]' not in launch_app.APPLICATION_CHECK
 
 
 def test_requirements_digest_controls_dependency_reuse(tmp_path: Path) -> None:
@@ -289,11 +308,13 @@ def test_main_does_not_copy_api_key_into_failure_log(
         path.parent.mkdir(parents=True, exist_ok=True)
         if relative_path == ".python-version":
             content = "3.14.3\n"
-        elif relative_path == ".env":
-            content = f"MODEL_PROVIDER=deepseek\nDEEPSEEK_API_KEY={secret}\n"
         else:
             content = "ok\n"
         path.write_text(content, encoding="utf-8")
+    (tmp_path / ".env").write_text(
+        f"MODEL_PROVIDER=deepseek\nDEEPSEEK_API_KEY={secret}\n",
+        encoding="utf-8",
+    )
 
     monkeypatch.setattr(launch_app, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(

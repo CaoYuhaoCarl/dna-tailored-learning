@@ -36,7 +36,6 @@ def test_deepseek_v4_flash_connects(
     monkeypatch.setenv("MODEL_PROVIDER", "deepseek")
     monkeypatch.setenv("DEEPSEEK_API_KEY", api_key)
     del api_key
-    monkeypatch.setattr(model_module, "load_dotenv", lambda *args, **kwargs: False)
 
     content = None
     try:

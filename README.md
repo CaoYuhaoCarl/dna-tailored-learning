@@ -15,10 +15,10 @@
 
 1. 下载仓库的源码 ZIP，并将整个 ZIP 解压到本地文件夹。
 2. 不要直接在压缩包预览窗口中运行任何文件。
-3. 用 VS Code 等文本编辑器打开解压目录，将 `.env.example` 复制为 `.env`。
-4. 在 `.env` 中选择 `deepseek`、`moonshot` 或 `gemini`，并只填写所选供应商的 API Key。
-   中国大陆学生应选择 `deepseek` 或 `moonshot`。
-5. Windows 双击 `start_windows.bat`，macOS 双击 `start_mac.command`。
+3. Windows 双击 `start_windows.bat`，macOS 双击 `start_mac.command`。
+4. 浏览器打开后，在首页展开“模型配置”。
+5. 选择 DeepSeek、Kimi 或 Gemini，并填写对应的 API Key。
+6. 点击“保存并测试连接”，看到成功提示后即可开始课程。
 
 首次启动会在项目内创建 `.venv`，并默认通过[清华 TUNA PyPI 镜像](https://mirrors.tuna.tsinghua.edu.cn/help/pypi/)安装 `requirements.txt` 中的依赖，因此需要能访问普通互联网并可能等待几分钟。
 启动器只安装预编译依赖包，不要求学生电脑配置本地编译工具。
@@ -33,7 +33,7 @@ Gemini 代码选项继续保留，但不是学生课程选项。
 关闭启动窗口或在窗口中按 `Ctrl+C` 可以停止课程应用。
 
 如果启动失败，窗口会显示修复建议，完整输出保存在 `logs/startup.log`。
-脚本不会显示、复制或上传 `.env` 中的 API Key。
+首页会将 API Key 保存到本机的 `.env`，但不会在页面或启动日志中回显密钥。
 
 ## 创建开发环境
 
@@ -57,13 +57,14 @@ python -m pip install -r requirements-dev.txt
 copy .env.example .env
 ```
 
-打开 `.env`，将 `MODEL_PROVIDER` 设置为 `deepseek`、`moonshot` 或 `gemini`，再填写对应的 API Key。
+开发环境也可以直接在 Streamlit 首页配置模型。
+如需手工配置，打开 `.env`，将 `MODEL_PROVIDER` 设置为 `deepseek`、`moonshot` 或 `gemini`，再填写对应的 API Key。
 
 三个 Key 可以同时保存在 `.env` 中，程序只检查 `MODEL_PROVIDER` 选中的一项。
 
 V0 到 V4 共用该设置，不需要为每个 Agent 单独配置模型。
 
-修改 `MODEL_PROVIDER` 后，必须重启 Jupyter Kernel 或重新启动程序，再重新运行模型初始化单元格。
+首页保存的模型配置会立即生效，无需重启 Streamlit。
 
 不要把真实 API Key 写入源码或 Notebook。
 

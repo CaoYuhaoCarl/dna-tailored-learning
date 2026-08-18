@@ -1,6 +1,9 @@
+import os
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from dotenv import dotenv_values
 
 import src.model as model_module
 
@@ -18,8 +21,27 @@ _MODEL_ENVIRONMENT_VARIABLES = (
 
 
 @pytest.fixture(autouse=True)
-def isolate_model_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(model_module, "load_dotenv", lambda *args, **kwargs: False)
+def isolate_model_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_example_file = tmp_path / ".env.example"
+    env_example_file.write_text(
+        "# 可选模型配置\n"
+        "MODEL_PROVIDER=deepseek\n"
+        "DEEPSEEK_API_KEY=\n"
+        "MOONSHOT_API_KEY=\n"
+        "GEMINI_API_KEY=\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(model_module, "ENV_FILE", env_file)
+    monkeypatch.setattr(
+        model_module,
+        "ENV_EXAMPLE_FILE",
+        env_example_file,
+        raising=False,
+    )
     for name in _MODEL_ENVIRONMENT_VARIABLES:
         monkeypatch.delenv(name, raising=False)
 
@@ -70,17 +92,20 @@ def test_get_llm_defaults_to_deepseek(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_get_llm_does_not_override_running_process_environment(
+def test_get_llm_prefers_running_process_environment_over_env_file(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-key")
-    loader = Mock(return_value=False)
-    monkeypatch.setattr(model_module, "load_dotenv", loader)
-    monkeypatch.setattr(model_module, "ChatDeepSeek", Mock(return_value=object()))
+    model_module.ENV_FILE.write_text(
+        "MODEL_PROVIDER=deepseek\nDEEPSEEK_API_KEY=file-key\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "process-key")
+    constructor = Mock(return_value=object())
+    monkeypatch.setattr(model_module, "ChatDeepSeek", constructor)
 
     model_module.get_llm()
 
-    loader.assert_called_once_with(model_module.ENV_FILE, override=False)
+    assert constructor.call_args.kwargs["api_key"] == "process-key"
 
 
 def test_validate_model_configuration_does_not_construct_model(
@@ -204,3 +229,150 @@ def test_get_llm_rejects_invalid_numeric_settings(
 
     with pytest.raises(model_module.ModelConfigurationError, match=message):
         model_module.get_llm()
+
+
+def test_model_configuration_summary_never_contains_api_keys() -> None:
+    secret = "summary-must-not-contain-this-key"
+    model_module.ENV_FILE.write_text(
+        "MODEL_PROVIDER=moonshot\n"
+        "DEEPSEEK_API_KEY=deepseek-key\n"
+        f"MOONSHOT_API_KEY={secret}\n",
+        encoding="utf-8",
+    )
+
+    summary = model_module.get_model_configuration_summary()
+
+    assert summary == {
+        "provider": "moonshot",
+        "configured_providers": ["deepseek", "moonshot"],
+    }
+    assert secret not in str(summary)
+
+
+def test_save_model_configuration_creates_env_from_example_and_is_immediate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "new-moonshot-key"
+    constructor = Mock(return_value=object())
+    monkeypatch.setattr(model_module, "ChatOpenAI", constructor)
+
+    summary = model_module.save_model_configuration("moonshot", secret)
+    model_module.get_llm()
+
+    assert summary == {
+        "provider": "moonshot",
+        "configured_providers": ["moonshot"],
+    }
+    assert model_module.ENV_FILE.is_file()
+    contents = model_module.ENV_FILE.read_text(encoding="utf-8")
+    assert "# 可选模型配置" in contents
+    assert dotenv_values(model_module.ENV_FILE)["MOONSHOT_API_KEY"] == secret
+    assert constructor.call_args.kwargs["api_key"] == secret
+    assert not list(model_module.ENV_FILE.parent.glob("..env.*.tmp"))
+    if os.name != "nt":
+        assert model_module.ENV_FILE.stat().st_mode & 0o077 == 0
+
+
+def test_save_model_configuration_preserves_other_keys_and_unknown_settings() -> None:
+    model_module.ENV_FILE.write_text(
+        "# 保留这条注释\n"
+        "MODEL_PROVIDER=deepseek\n"
+        "DEEPSEEK_API_KEY=existing-deepseek-key\n"
+        "CUSTOM_SETTING=keep-me\n",
+        encoding="utf-8",
+    )
+
+    model_module.save_model_configuration("gemini", "new-gemini-key")
+
+    values = dotenv_values(model_module.ENV_FILE)
+    contents = model_module.ENV_FILE.read_text(encoding="utf-8")
+    assert values["MODEL_PROVIDER"] == "gemini"
+    assert values["DEEPSEEK_API_KEY"] == "existing-deepseek-key"
+    assert values["GEMINI_API_KEY"] == "new-gemini-key"
+    assert values["CUSTOM_SETTING"] == "keep-me"
+    assert "# 保留这条注释" in contents
+
+
+def test_save_model_configuration_blank_key_reuses_saved_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_module.ENV_FILE.write_text(
+        "MODEL_PROVIDER=deepseek\nMOONSHOT_API_KEY=saved-moonshot-key\n",
+        encoding="utf-8",
+    )
+    constructor = Mock(return_value=object())
+    monkeypatch.setattr(model_module, "ChatOpenAI", constructor)
+
+    model_module.save_model_configuration("moonshot", "")
+    model_module.get_llm()
+
+    assert dotenv_values(model_module.ENV_FILE)["MOONSHOT_API_KEY"] == (
+        "saved-moonshot-key"
+    )
+    assert constructor.call_args.kwargs["api_key"] == "saved-moonshot-key"
+
+
+def test_save_model_configuration_rejects_blank_missing_key() -> None:
+    with pytest.raises(
+        model_module.ModelConfigurationError,
+        match="MOONSHOT_API_KEY",
+    ):
+        model_module.save_model_configuration("moonshot", "")
+
+    assert not model_module.ENV_FILE.exists()
+
+
+@pytest.mark.parametrize(
+    ("provider", "api_key", "message"),
+    [
+        ("unknown", "safe-key", "deepseek、moonshot 或 gemini"),
+        ("deepseek", "line-one\nline-two", "不能包含换行符"),
+        ("deepseek", "nul\0key", "不能包含空字符"),
+    ],
+)
+def test_save_model_configuration_rejects_invalid_input_without_leaking_key(
+    provider: str,
+    api_key: str,
+    message: str,
+) -> None:
+    with pytest.raises(model_module.ModelConfigurationError, match=message) as error:
+        model_module.save_model_configuration(provider, api_key)
+
+    assert api_key not in str(error.value)
+    assert not model_module.ENV_FILE.exists()
+
+
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="Windows 普通用户可能无法创建符号链接",
+)
+def test_save_model_configuration_rejects_symlink() -> None:
+    target = model_module.ENV_FILE.parent / "outside.env"
+    target.write_text("MODEL_PROVIDER=deepseek\n", encoding="utf-8")
+    model_module.ENV_FILE.symlink_to(target)
+
+    with pytest.raises(model_module.ModelConfigurationError, match="符号链接"):
+        model_module.save_model_configuration("deepseek", "new-key")
+
+    assert target.read_text(encoding="utf-8") == "MODEL_PROVIDER=deepseek\n"
+
+
+def test_get_llm_reloads_env_file_on_each_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    constructor = Mock(return_value=object())
+    monkeypatch.setattr(model_module, "ChatDeepSeek", constructor)
+    model_module.ENV_FILE.write_text(
+        "MODEL_PROVIDER=deepseek\nDEEPSEEK_API_KEY=first-key\n",
+        encoding="utf-8",
+    )
+
+    model_module.get_llm()
+    model_module.ENV_FILE.write_text(
+        "MODEL_PROVIDER=deepseek\nDEEPSEEK_API_KEY=second-key\n",
+        encoding="utf-8",
+    )
+    model_module.get_llm()
+
+    received_keys = [call.kwargs["api_key"] for call in constructor.call_args_list]
+    assert received_keys == ["first-key", "second-key"]

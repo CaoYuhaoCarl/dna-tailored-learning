@@ -17,7 +17,7 @@ from typing import TextIO
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_FILES = (
     ".python-version",
-    ".env",
+    ".env.example",
     "requirements.txt",
     "app.py",
     "src/model.py",
@@ -30,12 +30,15 @@ APPLICATION_CHECK = """
 from src.facade import get_app_status
 
 status = get_app_status()
-if not status["ready"]:
+if not status["runtime_ready"]:
     print("运行条件检查失败：")
-    for error in status["errors"]:
+    for error in status["runtime_errors"]:
         print(f"- {error}")
     raise SystemExit(1)
-print(f"运行环境检查通过，模型供应商：{status['model_provider']}。")
+if status["model_ready"]:
+    print(f"运行环境检查通过，模型供应商：{status['model_provider']}。")
+else:
+    print("运行环境检查通过，请在首页完成模型配置。")
 """.strip()
 
 
@@ -68,7 +71,7 @@ def validate_required_files(project_root: Path) -> None:
 
     missing_list = "\n".join(f"- {path}" for path in missing)
     raise LaunchError(
-        "启动文件不完整。请先完整解压源码 ZIP，并按 README 配置 .env。"
+        "启动文件不完整。请先完整解压源码 ZIP。"
         f"\n缺少文件：\n{missing_list}"
     )
 
@@ -117,7 +120,7 @@ def _emit(log: TextIO, message: str) -> None:
 
 def _emit_repair_steps(log: TextIO, log_path: Path) -> None:
     _emit(log, "修复步骤：")
-    _emit(log, "1. 确认源码 ZIP 已完整解压，并已手动创建和填写 .env。")
+    _emit(log, "1. 确认源码 ZIP 已完整解压，课程文件没有被删除。")
     _emit(log, "2. 首次安装依赖时需访问可用的 Python 包镜像，默认使用清华 TUNA。")
     _emit(log, "3. 如果提示 .venv 损坏，请删除项目中的 .venv 文件夹后重试。")
     _emit(log, f"4. 如果仍然失败，请保留此窗口并查看日志：{log_path}")
