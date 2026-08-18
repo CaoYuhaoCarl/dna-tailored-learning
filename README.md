@@ -2,7 +2,8 @@
 
 当前仓库已完成第一阶段基建、V0 模型连通、V1 Prompt、V2 按需加载 Skill、V3 知识卡检索与引用和 V4 用户主导型学习 Workflow。
 
-项目唯一支持的 Python 小版本是 Python 3.14，当前验证补丁版本记录在 `.python-version` 中。
+项目支持 Python 3.11.x 至 3.14.x。
+`.python-version` 中的 Python 3.14.3 是推荐且已验证的开发版本，不是唯一允许运行的版本。
 
 教师端开发和演示统一使用 JupyterLab，不额外安装经典 Notebook 应用。
 
@@ -10,7 +11,7 @@
 
 ## 从源码 ZIP 双击启动
 
-该方式支持 Python 3.14.x，macOS 需要 12 或更高版本。
+该方式支持 Python 3.11.x 至 3.14.x，macOS 需要 12 或更高版本。
 电脑需要提前安装 Python，启动脚本不会自动安装或升级 Python。
 
 1. 下载仓库的源码 ZIP，并将整个 ZIP 解压到本地文件夹。
@@ -56,6 +57,9 @@ py -V:3.14 -m venv .venv
 python -m pip install -r requirements-dev.txt
 copy .env.example .env
 ```
+
+上面的命令使用推荐版本 Python 3.14。
+如果本机安装的是 Python 3.11、3.12 或 3.13，也可以将命令中的 `3.14` 替换为对应版本。
 
 开发环境也可以直接在 Streamlit 首页配置模型。
 如需手工配置，打开 `.env`，将 `MODEL_PROVIDER` 设置为 `deepseek`、`moonshot` 或 `gemini`，再填写对应的 API Key。

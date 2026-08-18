@@ -15,6 +15,16 @@ from typing import TextIO
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.python_support import (  # noqa: E402
+    SUPPORTED_PYTHON_LABEL,
+    is_supported_python_series,
+    parse_python_series,
+)
+
+
 REQUIRED_FILES = (
     ".python-version",
     ".env.example",
@@ -46,18 +56,6 @@ class LaunchError(RuntimeError):
     """启动准备或应用进程失败。"""
 
 
-def parse_python_series(version: str) -> tuple[int, int] | None:
-    """将 Python 版本解析为 major/minor，无法解析时返回 None。"""
-
-    parts = version.strip().split(".")
-    if len(parts) < 2:
-        return None
-    try:
-        return int(parts[0]), int(parts[1])
-    except ValueError:
-        return None
-
-
 def validate_required_files(project_root: Path) -> None:
     """确认源码 ZIP 已完整解压，并且本地配置文件已经创建。"""
 
@@ -77,7 +75,7 @@ def validate_required_files(project_root: Path) -> None:
 
 
 def validate_supported_platform(platform_name: str, macos_version: str) -> None:
-    """拒绝不支持 Python 3.14 课程依赖的旧版 macOS。"""
+    """拒绝不支持课程依赖的旧版 macOS。"""
 
     if platform_name.lower() != "darwin":
         return
@@ -174,35 +172,34 @@ def run_logged_command(
         raise LaunchError(f"{description}失败，退出码为 {return_code}。")
 
 
-def _expected_python(project_root: Path) -> tuple[str, tuple[int, int]]:
+def _read_recommended_python(project_root: Path) -> str:
     version_path = project_root / ".python-version"
     try:
-        verified_version = version_path.read_text(encoding="utf-8").strip()
+        recommended_version = version_path.read_text(encoding="utf-8").strip()
     except OSError as exc:
         raise LaunchError(f"无法读取 {version_path.name}：{exc}") from exc
 
-    expected_series = parse_python_series(verified_version)
-    if expected_series is None:
+    recommended_series = parse_python_series(recommended_version)
+    if (
+        recommended_series is None
+        or not is_supported_python_series(recommended_series)
+    ):
         raise LaunchError(
-            f".python-version 内容无效：{verified_version!r}。"
+            f".python-version 内容无效：{recommended_version!r}。"
             "请重新下载完整源码 ZIP。"
         )
-    return verified_version, expected_series
+    return recommended_version
 
 
-def _validate_host_python(
-    verified_version: str,
-    expected_series: tuple[int, int],
-) -> None:
+def _validate_host_python(recommended_version: str) -> None:
     current_series = sys.version_info[:2]
-    if current_series == expected_series:
+    if is_supported_python_series(current_series):
         return
 
-    required = f"{expected_series[0]}.{expected_series[1]}.x"
     current = ".".join(str(part) for part in sys.version_info[:3])
     raise LaunchError(
-        f"当前 Python 为 {current}，课程需要 Python {required}。"
-        f"仓库已验证版本为 {verified_version}，请先安装兼容版本。"
+        f"当前 Python 为 {current}，课程支持 {SUPPORTED_PYTHON_LABEL}。"
+        f"仓库推荐版本为 {recommended_version}，请先安装兼容版本。"
     )
 
 
@@ -214,7 +211,6 @@ def _venv_python(project_root: Path) -> Path:
 
 def _validate_venv_python(
     python_path: Path,
-    expected_series: tuple[int, int],
     *,
     project_root: Path,
     environment: Mapping[str, str],
@@ -244,10 +240,15 @@ def _validate_venv_python(
             "现有 .venv 无法运行。请删除项目中的 .venv 文件夹后重新启动。"
         ) from exc
 
-    expected = f"{expected_series[0]}.{expected_series[1]}"
-    if completed.returncode != 0 or completed.stdout.strip() != expected:
+    detected_version = completed.stdout.strip()
+    detected_series = parse_python_series(detected_version)
+    if (
+        completed.returncode != 0
+        or detected_series is None
+        or not is_supported_python_series(detected_series)
+    ):
         raise LaunchError(
-            f"现有 .venv 不是 Python {expected}.x。"
+            f"现有 .venv 不是受支持的 {SUPPORTED_PYTHON_LABEL} 环境。"
             "请删除项目中的 .venv 文件夹后重新启动。"
         )
 
@@ -298,7 +299,6 @@ def _install_dependencies(
 
 def prepare_environment(
     project_root: Path,
-    expected_series: tuple[int, int],
     *,
     log: TextIO,
     environment: Mapping[str, str],
@@ -321,7 +321,6 @@ def prepare_environment(
 
     _validate_venv_python(
         python_path,
-        expected_series,
         project_root=project_root,
         environment=environment,
     )
@@ -407,12 +406,11 @@ def main(arguments: Sequence[str] | None = None) -> int:
         _emit(log, f"课程启动检查开始：{datetime.now().isoformat(timespec='seconds')}")
         try:
             validate_required_files(project_root)
-            verified_version, expected_series = _expected_python(project_root)
-            _validate_host_python(verified_version, expected_series)
+            recommended_version = _read_recommended_python(project_root)
+            _validate_host_python(recommended_version)
             validate_supported_platform(sys.platform, platform.mac_ver()[0])
             python_path = prepare_environment(
                 project_root,
-                expected_series,
                 log=log,
                 environment=environment,
             )
