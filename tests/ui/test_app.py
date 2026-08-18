@@ -18,7 +18,7 @@ def _ready_status() -> facade_module.AppStatus:
         "runtime_ready": True,
         "model_ready": True,
         "python_version": "3.14.3",
-        "expected_python_version": "3.14.3",
+        "recommended_python_version": "3.14.3",
         "model_provider": "deepseek",
         "missing_files": [],
         "runtime_errors": [],
@@ -33,7 +33,7 @@ def _unconfigured_status() -> facade_module.AppStatus:
         "runtime_ready": True,
         "model_ready": False,
         "python_version": "3.14.3",
-        "expected_python_version": "3.14.3",
+        "recommended_python_version": "3.14.3",
         "model_provider": None,
         "missing_files": [],
         "runtime_errors": [],
@@ -116,7 +116,7 @@ def test_home_shows_progress_recovery_and_configuration_steps(monkeypatch) -> No
             "runtime_ready": False,
             "model_ready": False,
             "python_version": "3.14.3",
-            "expected_python_version": "3.14.3",
+            "recommended_python_version": "3.14.3",
             "model_provider": None,
             "missing_files": ["student/prompt.md"],
             "runtime_errors": ["课程运行所需文件不完整。"],
@@ -143,6 +143,7 @@ def test_home_shows_progress_recovery_and_configuration_steps(monkeypatch) -> No
         "家长修复步骤",
     ]
     assert app.expander[0].proto.expanded is True
+    assert "Python 3.11.x 至 3.14.x" in _displayed_text(app)
 
 
 def test_home_saves_password_key_and_tests_all_provider_option(

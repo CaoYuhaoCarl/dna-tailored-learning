@@ -6,6 +6,7 @@ import tomllib
 from pathlib import Path
 
 from src.retrieval import discover_knowledge_cards
+from src.python_support import REQUIRES_PYTHON
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -18,7 +19,8 @@ def test_project_metadata_declares_supported_python_series() -> None:
 
     assert metadata["name"] == "agent-course-teen-v1"
     assert metadata["version"] == "1.0.0"
-    assert metadata["requires-python"] == ">=3.14,<3.15"
+    assert metadata["requires-python"] == ">=3.11,<3.15"
+    assert metadata["requires-python"] == REQUIRES_PYTHON
 
 
 def test_sensitive_files_are_ignored() -> None:
