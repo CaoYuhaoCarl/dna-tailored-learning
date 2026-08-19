@@ -1,6 +1,7 @@
 from pathlib import Path
 from unittest.mock import Mock
 
+import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 import src.facade as facade_module
@@ -165,40 +166,67 @@ def test_lesson_1_save_error_never_sends_a_chat_message(monkeypatch) -> None:
     assert "已被其他页面修改" in app.error[0].value
 
 
-def test_lesson_1_v2_keeps_separate_history_and_explains_tool_calls(
+def test_lesson_1_v2_keeps_history_and_displays_loaded_skill_name(
     monkeypatch,
 ) -> None:
+    switch_page = Mock()
+    monkeypatch.setattr(st, "switch_page", switch_page)
     _, save_artifact, invoke, _, _ = _configure_page(monkeypatch)
     invoke.return_value = new_agent_result(
         "V2",
-        text="已按 Skill 整理。",
+        text="侦探闯关开始。",
         tool_calls=[
             {
                 "name": "load_skill",
-                "args": {"skill_name": "sorting-out-mistakes"},
+                "args": {"skill_name": "english-quest"},
             }
         ],
     )
     app = AppTest.from_file(PAGE_PATH).run()
     app.segmented_control[0].set_value("V2").run()
 
-    app.chat_input[0].set_value("请整理错题").run()
+    app.chat_input[0].set_value("玩侦探闯关练英语").run()
 
     assert not app.exception
     save_artifact.assert_not_called()
-    invoke.assert_called_once_with("V2", "请整理错题", history=[])
+    invoke.assert_called_once_with("V2", "玩侦探闯关练英语", history=[])
     assert app.session_state["lesson1_histories"]["V1"] == []
     assert app.session_state["lesson1_histories"]["V2"][-1] == {
         "role": "assistant",
-        "content": "已按 Skill 整理。",
+        "content": "侦探闯关开始。",
     }
     assert app.session_state["lesson1_last_results"]["V2"]["tool_calls"][0][
         "name"
     ] == "load_skill"
     assert any(
-        "读取了整理错题的方法" in markdown.value for markdown in app.markdown
+        "english-quest" in markdown.value for markdown in app.markdown
     )
     assert any("load_skill" in markdown.value for markdown in app.markdown)
+    switch_page.assert_called_once_with("app_pages/english_quest.py")
+    quest_session = app.session_state["english_quest_session"]
+    assert quest_session["agent_stage"] == "V2"
+    assert quest_session["source_history_key"] == "lesson1_histories"
+    assert quest_session["history"] == app.session_state[
+        "lesson1_histories"
+    ]["V2"]
+
+
+def test_lesson_1_v2_ordinary_english_question_does_not_switch_page(
+    monkeypatch,
+) -> None:
+    switch_page = Mock()
+    monkeypatch.setattr(st, "switch_page", switch_page)
+    _, _, invoke, _, _ = _configure_page(monkeypatch)
+    invoke.return_value = new_agent_result("V2", text="现在完成时表示过去与现在有关。")
+    app = AppTest.from_file(PAGE_PATH).run()
+    app.segmented_control[0].set_value("V2").run()
+
+    app.chat_input[0].set_value("什么是现在完成时？").run()
+
+    assert not app.exception
+    invoke.assert_called_once_with("V2", "什么是现在完成时？", history=[])
+    switch_page.assert_not_called()
+    assert "english_quest_session" not in app.session_state
 
 
 def test_lesson_1_v0_chat_runs_without_saving_markdown(monkeypatch) -> None:

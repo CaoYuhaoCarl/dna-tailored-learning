@@ -362,6 +362,65 @@ def test_invoke_v2_exposes_metadata_and_loads_full_skill_on_demand(
     ]
 
 
+def test_invoke_v2_loads_english_quest_and_passes_game_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(agents_module, "get_llm", lambda: object())
+    inputs: list[dict] = []
+    loaded_instructions: list[str] = []
+
+    def fake_create_agent(*, model: object, tools: list, system_prompt: str):
+        assert "english-quest: 当学生明确要求通过闯关" in system_prompt
+        assert "sorting-out-mistakes: 用于整理错题" in system_prompt
+
+        class FakeQuestAgent:
+            def invoke(self, state: dict) -> dict:
+                inputs.append(state)
+                loaded_instructions.append(
+                    tools[0].invoke({"skill_name": "english-quest"})
+                )
+                return {
+                    "messages": [
+                        SimpleNamespace(
+                            content="",
+                            tool_calls=[
+                                {
+                                    "name": "load_skill",
+                                    "args": {"skill_name": "english-quest"},
+                                    "id": "call-quest",
+                                    "type": "tool_call",
+                                }
+                            ],
+                        ),
+                        SimpleNamespace(
+                            content="回答正确，进入第 2 关。",
+                            tool_calls=[],
+                        ),
+                    ]
+                }
+
+        return FakeQuestAgent()
+
+    monkeypatch.setattr(agents_module, "create_agent", fake_create_agent)
+    history: list[ChatMessage] = [
+        {"role": "user", "content": "玩侦探闯关练现在完成时"},
+        {
+            "role": "assistant",
+            "content": "关卡：1/5，生命：❤️❤️❤️，经验：0 XP。你选择哪一个？",
+        },
+    ]
+
+    result = agents_module.invoke_v2("B", history=history)
+
+    assert result["error"] is None
+    assert inputs == [
+        {"messages": [*history, {"role": "user", "content": "B"}]}
+    ]
+    assert "把学生指定的英语知识点变成一个五关剧情游戏" in loaded_instructions[0]
+    assert "完整对话历史延续同一局游戏" in loaded_instructions[0]
+    assert result["tool_calls"][0]["args"] == {"skill_name": "english-quest"}
+
+
 def test_invoke_v2_reloads_skill_instructions_on_every_call(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

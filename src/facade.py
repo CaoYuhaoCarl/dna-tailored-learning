@@ -82,6 +82,9 @@ class _LessonArtifactSpec:
 _REQUIRED_APP_FILES = (
     ".python-version",
     "student/prompt.md",
+    "student/skill/english-quest/SKILL.md",
+    "student/skill/english-quest/scripts/quest_state.py",
+    "student/skill/english-quest/assets/detective-board.svg",
     "student/skill/sorting-out-mistakes/SKILL.md",
     "student/v4-prompt.md",
     "student/knowledge/english/grammar/present-perfect.md",
