@@ -126,6 +126,16 @@ V2 启动时只向模型提供 `student/skill/` 下各项 Skill 的 `name` 和 `
 
 只有当对话需求匹配时，Agent 才会调用 `load_skill` 读取完整 `SKILL.md`，调用记录保存在结果的 `tool_calls` 字段中。
 
+`english-quest` 在学生明确要求通过闯关、角色扮演或积分游戏练习英语时加载，并通过对话历史延续五关剧情游戏。
+
+普通英语问答不会加载该 Skill，游戏也不会写入文件。
+
+在 Streamlit 课程页中，真实的 `load_skill(english-quest)` 工具调用会自动把学生带到“英语剧情闯关”页面，并把已经生成的第一关和完整对话历史一起交给新页面。
+
+该 Skill 还包含 `scripts/quest_state.py` 和 `assets/detective-board.svg`，分别负责把对话转换为关卡状态和提供任务页视觉资源。
+
+也可以从侧边导航直接打开“英语剧情闯关”页面，自选知识点和剧情后开始新任务。
+
 错题整理 Skill 加载后，Agent 会复用对话中已有信息。
 
 当学生明确要求整理或保存时，未知分析字段会标记为“待补充”，不会为了凑齐字段无限追问。
@@ -145,6 +155,8 @@ Frontmatter 保存稳定 ID、学科、主题、来源和复习状态等机器�
 底层 `src/storage.py` 只允许从 `inbox/` 读取批量输入，或在 `records/` 下新建正式记录，并拒绝路径越界、符号链接逃逸和静默覆盖。
 
 Skill 演示 Notebook 位于 `teacher/lesson_2_skill.ipynb`：
+
+Notebook 提供普通知识问答、英语剧情闯关和错题整理三种连续输入，用于观察 Agent 如何按需求选择或切换 Skill。
 
 ```bash
 jupyter lab teacher/lesson_2_skill.ipynb

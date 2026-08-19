@@ -2,6 +2,7 @@ from pathlib import Path
 from unittest.mock import Mock, call
 
 import pytest
+import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 import src.facade as facade_module
@@ -151,6 +152,38 @@ def test_lesson_2_v3_uses_history_and_displays_evidence(monkeypatch) -> None:
 
     assert invoke.call_count == 2
     assert save_progress.call_count == 2
+
+
+def test_lesson_2_displays_loaded_skill_name(monkeypatch) -> None:
+    switch_page = Mock()
+    monkeypatch.setattr(st, "switch_page", switch_page)
+    invoke, chat_v4, _, _ = _configure_page(monkeypatch)
+    invoke.return_value = new_agent_result(
+        "V3",
+        text="侦探闯关开始。",
+        tool_calls=[
+            {
+                "name": "load_skill",
+                "args": {"skill_name": "english-quest"},
+            }
+        ],
+    )
+    app = AppTest.from_file(PAGE_PATH).run()
+
+    app.chat_input[0].set_value("玩侦探闯关练英语").run()
+
+    assert not app.exception
+    invoke.assert_called_once_with("V3", "玩侦探闯关练英语", history=[])
+    chat_v4.assert_not_called()
+    visible_text = [item.value for item in app.markdown]
+    assert any("english-quest" in item for item in visible_text)
+    switch_page.assert_called_once_with("app_pages/english_quest.py")
+    quest_session = app.session_state["english_quest_session"]
+    assert quest_session["agent_stage"] == "V3"
+    assert quest_session["source_history_key"] == "lesson2_histories"
+    assert quest_session["history"] == app.session_state[
+        "lesson2_histories"
+    ]["V3"]
 
 
 def test_lesson_2_chat_keeps_agent_left_and_student_right(monkeypatch) -> None:

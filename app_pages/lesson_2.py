@@ -14,6 +14,12 @@ from src.progress import (
     load_progress,
     save_progress,
 )
+from src.skill_pages import (
+    ENGLISH_QUEST_NAME,
+    ENGLISH_QUEST_PAGE,
+    new_english_quest_session,
+    result_loaded_skill,
+)
 
 
 STAGES = ("V3", "V4")
@@ -61,7 +67,7 @@ WORKFLOW_GUIDE = (
     "5. 最后回答助手生成的新练习。"
 )
 TOOL_DESCRIPTIONS = {
-    "load_skill": "尝试读取整理错题的方法",
+    "load_skill": "尝试读取任务需要的 Skill",
     "load_mistake_file": "尝试读取等待整理的错题材料",
     "use_knowledge_card": "尝试查看一张可能有帮助的知识卡",
 }
@@ -342,6 +348,10 @@ with st.sidebar:
             name = tool_call.get("name")
             if name in TOOL_DESCRIPTIONS:
                 description = TOOL_DESCRIPTIONS[name]
+                if name == "load_skill":
+                    skill_name = tool_call.get("args", {}).get("skill_name")
+                    if skill_name:
+                        description = f"尝试读取 Skill：`{skill_name}`"
                 if description not in activity_items:
                     activity_items.append(description)
         activity_items.extend(_verified_save_statuses(current_trace))
@@ -510,6 +520,21 @@ if submitted_message is not None:
             st.write(result.get("text") or result.get("error"))
             if result.get("error"):
                 st.warning(result["error"])
+            elif stage == "V3" and result_loaded_skill(
+                result,
+                ENGLISH_QUEST_NAME,
+            ):
+                st.session_state.english_quest_session = (
+                    new_english_quest_session(
+                        history=st.session_state.lesson2_histories[stage],
+                        agent_stage="V3",
+                        return_page="app_pages/lesson_2.py",
+                        return_label="返回第二课",
+                        source_history_key="lesson2_histories",
+                        source_stage=stage,
+                    )
+                )
+                st.switch_page(ENGLISH_QUEST_PAGE)
         else:
             st.error(
                 "这条消息没有发送成功。"

@@ -219,6 +219,40 @@ def test_teacher_v2_dialogue_uses_live_input_and_displays_loaded_skill() -> None
     assert session["tool_calls"][2]["name"] == "save_mistake"
 
 
+def test_teacher_v2_notebook_compares_skill_routing_scenarios() -> None:
+    notebook_path = PROJECT_ROOT / "teacher" / "lesson_2_skill.ipynb"
+    notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+    markdown = "\n".join(
+        "".join(cell["source"])
+        for cell in notebook["cells"]
+        if cell["cell_type"] == "markdown"
+    )
+
+    assert "什么是现在完成时？" in markdown
+    assert "我们玩一个侦探闯关游戏练现在完成时。" in markdown
+    assert "把刚才答错的题整理进错题本。" in markdown
+    assert "english-quest" in markdown
+    assert "sorting-out-mistakes" in markdown
+    assert "专属闯关页面" in markdown
+    assert "scripts/" in markdown
+    assert "assets/" in markdown
+
+
+def test_english_quest_page_and_bundled_resources_are_wired() -> None:
+    app_source = (PROJECT_ROOT / "app.py").read_text(encoding="utf-8")
+    lesson_sources = "\n".join(
+        (PROJECT_ROOT / "app_pages" / filename).read_text(encoding="utf-8")
+        for filename in ("lesson_1.py", "lesson_2.py")
+    )
+    skill_root = PROJECT_ROOT / "student" / "skill" / "english-quest"
+
+    assert '"app_pages/english_quest.py"' in app_source
+    assert "result_loaded_skill" in lesson_sources
+    assert "st.switch_page(ENGLISH_QUEST_PAGE)" in lesson_sources
+    assert (skill_root / "scripts" / "quest_state.py").is_file()
+    assert (skill_root / "assets" / "detective-board.svg").is_file()
+
+
 def test_default_knowledge_cards_use_unique_yaml_ids_and_required_sections() -> None:
     knowledge_path = PROJECT_ROOT / "student" / "knowledge"
 
