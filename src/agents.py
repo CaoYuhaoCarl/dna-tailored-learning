@@ -10,6 +10,8 @@ from typing import Annotated, Any
 
 from langchain.agents import create_agent
 from langchain.tools import tool
+from langchain_core.tools import StructuredTool
+from langsmith import tracing_context
 
 from src.artifacts import (
     ArtifactError,
@@ -35,6 +37,14 @@ from src.model import (
     ModelConfigurationError,
     get_llm,
     validate_model_configuration,
+)
+from src.personalization import (
+    AgentPersonalization,
+    PersonalizationError,
+    compose_personalized_system_prompt,
+    contains_owner_data,
+    load_personalization,
+    redact_owner_data,
 )
 from src.retrieval import (
     KNOWLEDGE_DIRECTORY,
@@ -193,6 +203,109 @@ def _save_tool_result_trace(messages: Sequence[Any]) -> list[dict[str, Any]]:
     return trace
 
 
+_TRUSTED_TOOL_VALUES_KEY = "personalization_trusted_values"
+
+
+def _mark_trusted_tool_values(tool_object: Any, values: Sequence[str]) -> Any:
+    metadata = dict(getattr(tool_object, "metadata", None) or {})
+    metadata[_TRUSTED_TOOL_VALUES_KEY] = tuple(values)
+    tool_object.metadata = metadata
+    return tool_object
+
+
+def _trusted_tool_values(tool_object: Any) -> tuple[str, ...]:
+    metadata = getattr(tool_object, "metadata", None)
+    if not isinstance(metadata, dict):
+        return ()
+    values = metadata.get(_TRUSTED_TOOL_VALUES_KEY, ())
+    if not isinstance(values, (list, tuple)):
+        return ()
+    return tuple(value for value in values if isinstance(value, str))
+
+
+def _redact_public_tool_calls(
+    calls: Sequence[dict[str, Any]],
+    tools: Sequence[Any],
+    personalization: AgentPersonalization,
+    *,
+    trusted_user_texts: Sequence[str],
+) -> list[dict[str, Any]]:
+    trusted_by_name = {
+        getattr(item, "name", ""): _trusted_tool_values(item)
+        for item in tools
+    }
+    return [
+        redact_owner_data(
+            call,
+            personalization,
+            trusted_user_texts=(
+                *trusted_user_texts,
+                *trusted_by_name.get(call.get("name", ""), ()),
+            ),
+        )
+        for call in calls
+    ]
+
+
+def _guard_personalization_tools(
+    tools: Sequence[Any],
+    personalization: AgentPersonalization | None,
+    *,
+    trusted_user_texts: Sequence[str] = (),
+) -> list[Any]:
+    """在实际工具执行前拒绝任何包含 OWNER 原子资料的参数。"""
+
+    if personalization is None:
+        return list(tools)
+    guarded: list[Any] = []
+    for original in tools:
+        args_schema = getattr(original, "args_schema", None)
+        name = getattr(original, "name", None)
+        description = getattr(original, "description", None)
+        if args_schema is None or not isinstance(name, str) or not description:
+            guarded.append(original)
+            continue
+        trusted_tool_values = _trusted_tool_values(original)
+
+        def guarded_call(
+            _original=original,
+            _personalization=personalization,
+            _trusted_user_texts=trusted_user_texts,
+            _trusted_tool_values=trusted_tool_values,
+            _name=name,
+            **kwargs: Any,
+        ) -> Any:
+            if contains_owner_data(
+                kwargs,
+                _personalization,
+                trusted_user_texts=(
+                    *_trusted_user_texts,
+                    *_trusted_tool_values,
+                ),
+            ):
+                prefix = (
+                    "保存失败："
+                    if _name == "save_mistake"
+                    else "工具调用已拒绝："
+                )
+                return f"{prefix}参数包含只能用于回答的 OWNER 资料，本次未执行。"
+            return _original.invoke(kwargs)
+
+        guarded.append(
+            StructuredTool.from_function(
+                func=guarded_call,
+                name=name,
+                description=description,
+                args_schema=args_schema,
+                infer_schema=False,
+                return_direct=bool(getattr(original, "return_direct", False)),
+                response_format=getattr(original, "response_format", "content"),
+                metadata=dict(getattr(original, "metadata", None) or {}),
+            )
+        )
+    return guarded
+
+
 def _create_load_skill_tool(skills: Sequence[SkillMetadata]):
     skill_paths = {skill.name: skill.path for skill in skills}
     available_names = "、".join(skill_paths)
@@ -217,7 +330,7 @@ def _create_load_skill_tool(skills: Sequence[SkillMetadata]):
             )
         return read_skill(skill_path).instructions
 
-    return load_skill
+    return _mark_trusted_tool_values(load_skill, tuple(skill_paths))
 
 
 def _mistake_markdown(
@@ -438,7 +551,10 @@ def _create_save_mistake_tool(
 
         return f"保存成功：{_display_output_path(saved_path)}"
 
-    return save_mistake
+    return _mark_trusted_tool_values(
+        save_mistake,
+        ("chat", "待补充", "general"),
+    )
 
 
 def _v2_system_prompt(
@@ -602,7 +718,10 @@ def _create_use_knowledge_card_tool(candidates: Sequence[KnowledgeHit]):
             ]
         )
 
-    return use_knowledge_card
+    return _mark_trusted_tool_values(
+        use_knowledge_card,
+        (*cards, "核心规则", "例句", "易错提醒"),
+    )
 
 
 def _citations_from_tool_calls(
@@ -650,13 +769,26 @@ def _invoke_agent_with_tools(
     attachment: ChatAttachment | None = None,
     citations: list[Citation] | None = None,
     trace: list[dict[str, Any]] | None = None,
+    personalization: AgentPersonalization | None = None,
 ) -> AgentResult:
     """运行一次 Agent，并保留允许公开的工具调用和确定性写入结果。"""
 
     user_content = _current_user_content(message, attachment)
+    trusted_user_texts = [
+        *(item["content"] for item in conversation if item["role"] == "user"),
+        message,
+    ]
+    if attachment is not None:
+        attachment_text = attachment_search_text(attachment)
+        if attachment_text:
+            trusted_user_texts.append(attachment_text)
     agent = create_agent(
         model=get_llm(),
-        tools=list(tools),
+        tools=_guard_personalization_tools(
+            tools,
+            personalization,
+            trusted_user_texts=trusted_user_texts,
+        ),
         system_prompt=system_prompt,
     )
     state = agent.invoke(
@@ -679,12 +811,31 @@ def _invoke_agent_with_tools(
             stage,
             error=f"{stage} 返回了空内容，请稍后重试。",
         )
+    public_tool_calls = _tool_calls_from_messages(messages)
+    public_trace = [*(trace or []), *_save_tool_result_trace(messages)]
+    if personalization is not None:
+        public_tool_calls = _redact_public_tool_calls(
+            public_tool_calls,
+            tools,
+            personalization,
+            trusted_user_texts=trusted_user_texts,
+        )
+        public_trace = redact_owner_data(
+            public_trace,
+            personalization,
+            trusted_user_texts=(
+                *trusted_user_texts,
+                "保存成功",
+                "student/mistakes/records",
+                "mistake-",
+            ),
+        )
     result = new_agent_result(
         stage,
         text=text,
-        tool_calls=_tool_calls_from_messages(messages),
+        tool_calls=public_tool_calls,
         citations=citations,
-        trace=[*(trace or []), *_save_tool_result_trace(messages)],
+        trace=public_trace,
     )
     return sanitize_attachment_output(result, attachment)
 
@@ -701,6 +852,7 @@ def _invoke_skill_agent(
     citations: list[Citation] | None = None,
     trace: list[dict[str, Any]] | None = None,
     extra_tools: Sequence[Any] = (),
+    personalization: AgentPersonalization | None = None,
 ) -> AgentResult:
     """运行 V2/V3 共用的 Skill Agent，并保留工具调用记录。"""
 
@@ -728,6 +880,7 @@ def _invoke_skill_agent(
         attachment=attachment,
         citations=citations,
         trace=trace,
+        personalization=personalization,
     )
 
 
@@ -833,6 +986,7 @@ def invoke_v1(
     *,
     history: Sequence[ChatMessage] | None = None,
     attachment: ChatAttachment | None = None,
+    personalization: AgentPersonalization | None = None,
 ) -> AgentResult:
     """实时读取学生 Prompt 和对话历史，完成一轮苏格拉底问答。"""
 
@@ -842,26 +996,32 @@ def invoke_v1(
 
     try:
         conversation = _validated_history(history)
-        system_prompt = read_markdown(prompt_path)
+        profile = personalization or load_personalization()
+        system_prompt = compose_personalized_system_prompt(
+            read_markdown(prompt_path),
+            profile,
+        )
         user_content = _current_user_content(clean_message, attachment)
-        agent = create_agent(
-            model=get_llm(),
-            tools=[],
-            system_prompt=system_prompt,
-        )
-        state = agent.invoke(
-            {
-                "messages": [
-                    *conversation,
-                    {"role": "user", "content": user_content},
-                ]
-            }
-        )
+        with tracing_context(enabled=False):
+            agent = create_agent(
+                model=get_llm(),
+                tools=[],
+                system_prompt=system_prompt,
+            )
+            state = agent.invoke(
+                {
+                    "messages": [
+                        *conversation,
+                        {"role": "user", "content": user_content},
+                    ]
+                }
+            )
     except (
         ArtifactError,
         ChatSubmissionError,
         ConversationHistoryError,
         ModelConfigurationError,
+        PersonalizationError,
     ) as exc:
         return new_agent_result("V1", error=str(exc))
     except Exception as exc:
@@ -895,6 +1055,7 @@ def invoke_v2(
     *,
     history: Sequence[ChatMessage] | None = None,
     attachment: ChatAttachment | None = None,
+    personalization: AgentPersonalization | None = None,
 ) -> AgentResult:
     """按需加载匹配的标准 SKILL.md，完成一轮 V2 对话。"""
 
@@ -905,21 +1066,29 @@ def invoke_v2(
     try:
         conversation = _validated_history(history)
         base_prompt = read_markdown(prompt_path)
+        profile = personalization or load_personalization()
         skills = discover_skills(skills_path)
-        return _invoke_skill_agent(
-            stage="V2",
-            message=clean_message,
-            conversation=conversation,
-            system_prompt=_v2_system_prompt(base_prompt, skills),
-            skills=skills,
-            attachment=attachment,
-            allow_writes=mistake_write_requested(message),
+        system_prompt = compose_personalized_system_prompt(
+            _v2_system_prompt(base_prompt, skills),
+            profile,
         )
+        with tracing_context(enabled=False):
+            return _invoke_skill_agent(
+                stage="V2",
+                message=clean_message,
+                conversation=conversation,
+                system_prompt=system_prompt,
+                skills=skills,
+                attachment=attachment,
+                allow_writes=mistake_write_requested(message),
+                personalization=profile,
+            )
     except (
         ArtifactError,
         ChatSubmissionError,
         ConversationHistoryError,
         ModelConfigurationError,
+        PersonalizationError,
     ) as exc:
         return new_agent_result("V2", error=str(exc))
     except Exception as exc:
@@ -940,6 +1109,7 @@ def invoke_v3(
     *,
     history: Sequence[ChatMessage] | None = None,
     attachment: ChatAttachment | None = None,
+    personalization: AgentPersonalization | None = None,
 ) -> AgentResult:
     """在 V2 能力上自动检索知识卡，并返回可追溯引用。"""
 
@@ -953,6 +1123,7 @@ def invoke_v3(
     try:
         conversation = _validated_history(history)
         base_prompt = read_markdown(prompt_path)
+        profile = personalization or load_personalization()
         skills = discover_skills(skills_path)
         query_parts = [clean_message]
         attachment_text = attachment_search_text(attachment)
@@ -961,25 +1132,32 @@ def invoke_v3(
         if conversation:
             query_parts.insert(0, conversation[-2]["content"])
         candidates = retrieve_knowledge("\n".join(query_parts), knowledge_path)
-        result = _invoke_skill_agent(
-            stage="V3",
-            message=clean_message,
-            conversation=conversation,
-            system_prompt=_v3_system_prompt(base_prompt, skills, candidates),
-            skills=skills,
-            attachment=attachment,
-            allow_writes=mistake_write_requested(message),
-            extra_tools=(
-                (_create_use_knowledge_card_tool(candidates),)
-                if candidates
-                else ()
-            ),
+        system_prompt = compose_personalized_system_prompt(
+            _v3_system_prompt(base_prompt, skills, candidates),
+            profile,
         )
+        with tracing_context(enabled=False):
+            result = _invoke_skill_agent(
+                stage="V3",
+                message=clean_message,
+                conversation=conversation,
+                system_prompt=system_prompt,
+                skills=skills,
+                attachment=attachment,
+                allow_writes=mistake_write_requested(message),
+                extra_tools=(
+                    (_create_use_knowledge_card_tool(candidates),)
+                    if candidates
+                    else ()
+                ),
+                personalization=profile,
+            )
     except (
         ArtifactError,
         ChatSubmissionError,
         ConversationHistoryError,
         ModelConfigurationError,
+        PersonalizationError,
     ) as exc:
         return new_agent_result("V3", error=str(exc))
     except Exception as exc:
@@ -1004,6 +1182,7 @@ def invoke_v4_coach(
     history: Sequence[ChatMessage] | None = None,
     practice_item: PracticeItem | None = None,
     attachment: ChatAttachment | None = None,
+    personalization: AgentPersonalization | None = None,
 ) -> AgentResult:
     """运行不具备文件写入工具的 V4 全学科答疑 Agent。"""
 
@@ -1016,6 +1195,7 @@ def invoke_v4_coach(
     try:
         conversation = _validated_history(history)
         base_prompt = read_markdown(prompt_path)
+        profile = personalization or load_personalization()
         query_parts = [clean_message]
         attachment_text = attachment_search_text(attachment)
         if attachment_text:
@@ -1026,23 +1206,30 @@ def invoke_v4_coach(
         tools = (
             [_create_use_knowledge_card_tool(candidates)] if candidates else []
         )
-        result = _invoke_agent_with_tools(
-            stage="V4",
-            message=clean_message,
-            conversation=conversation,
-            system_prompt=_v4_coach_system_prompt(
+        system_prompt = compose_personalized_system_prompt(
+            _v4_coach_system_prompt(
                 base_prompt,
                 candidates,
                 practice_item,
             ),
-            tools=tools,
-            attachment=attachment,
+            profile,
         )
+        with tracing_context(enabled=False):
+            result = _invoke_agent_with_tools(
+                stage="V4",
+                message=clean_message,
+                conversation=conversation,
+                system_prompt=system_prompt,
+                tools=tools,
+                attachment=attachment,
+                personalization=profile,
+            )
     except (
         ArtifactError,
         ChatSubmissionError,
         ConversationHistoryError,
         ModelConfigurationError,
+        PersonalizationError,
     ) as exc:
         return new_agent_result("V4", error=str(exc))
     except Exception as exc:

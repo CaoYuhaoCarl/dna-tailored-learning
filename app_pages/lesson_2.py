@@ -27,6 +27,8 @@ from src.skill_pages import (
     result_loaded_skill,
 )
 
+from app_pages.personalization_ui import render_owner_memory_result
+
 
 STAGES = ("V3", "V4")
 STAGE_LABELS = {
@@ -461,6 +463,11 @@ if last_error and last_attempt:
         st.write(last_attempt)
     with _chat_bubble("assistant"):
         st.error(f"这条消息没有发送成功。{last_error}")
+
+render_owner_memory_result(
+    st.session_state.lesson2_last_results[stage],
+    state_key=f"lesson2_{stage.lower()}",
+)
 
 needs_review_decision = stage == "V4" and waiting_for == "review_decision"
 if needs_review_decision:

@@ -1,6 +1,9 @@
 import base64
+from contextlib import contextmanager
+from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -9,6 +12,7 @@ from PIL import Image
 
 import src.workflow as workflow_module
 from src.chat_submission import create_chat_attachment
+from src.personalization import AgentPersonalization, OwnerProfile
 from src.reporting import (
     discover_mistake_records,
     read_report_snapshot,
@@ -24,6 +28,42 @@ def _png_bytes() -> bytes:
 
 
 PNG_BYTES = _png_bytes()
+
+
+@pytest.fixture
+def synthetic_personalization() -> AgentPersonalization:
+    """Return a synthetic snapshot so tests never read the local OWNER file."""
+
+    return AgentPersonalization(
+        soul_markdown="SOUL-WORKFLOW-SENTINEL",
+        owner=OwnerProfile(
+            schema_version=1,
+            auto_memory=False,
+            preferred_name="OWNER-WORKFLOW-SENTINEL",
+            grade_band=None,
+            languages=(),
+            interests=(),
+            learning_goals=(),
+            strengths=(),
+            challenges=(),
+            response_preferences=(),
+            manual_notes="",
+        ),
+        soul_digest="workflow-soul-digest",
+        owner_digest="workflow-owner-digest",
+    )
+
+
+@pytest.fixture(autouse=True)
+def isolate_local_personalization(
+    monkeypatch: pytest.MonkeyPatch,
+    synthetic_personalization: AgentPersonalization,
+) -> None:
+    monkeypatch.setattr(
+        workflow_module,
+        "load_personalization",
+        lambda: synthetic_personalization,
+    )
 
 
 def _assert_checkpoint_has_no_attachment_payload(
@@ -152,7 +192,13 @@ def test_v4_read_only_coach_resumes_same_thread_without_writes(
         ),
     )
 
-    def fake_coach(message: str, *, history, practice_item=None):
+    def fake_coach(
+        message: str,
+        *,
+        history,
+        practice_item=None,
+        personalization=None,
+    ):
         seen_histories.append(list(history))
         return new_agent_result("V4", text=f"提示：{message}？")
 
@@ -170,6 +216,360 @@ def test_v4_read_only_coach_resumes_same_thread_without_writes(
     assert not records_root.exists()
     assert not report_path.exists()
     assert first["tool_calls"] == []
+
+
+def test_v4_personalization_runtime_reaches_only_coach_and_organizer(
+    isolated_graph,
+    monkeypatch: pytest.MonkeyPatch,
+    synthetic_personalization: AgentPersonalization,
+) -> None:
+    saver = InMemorySaver()
+    monkeypatch.setattr(
+        workflow_module,
+        "_V4_GRAPH",
+        workflow_module.build_v4_graph(checkpointer=saver),
+    )
+    classifier_calls: list[dict] = []
+    coach_profiles: list[object] = []
+    organizer_profiles: list[object] = []
+
+    def fake_classifier(message: str, **kwargs):
+        classifier_calls.append({"message": message, **kwargs})
+        return workflow_module.TurnDecision(
+            intent="answer",
+            confidence=1.0,
+            evidence="",
+            explicit_write=False,
+            topic_switch=False,
+            answer_status="none",
+            problem_summary=None,
+        )
+
+    def fake_coach(message: str, *, personalization, **_kwargs):
+        coach_profiles.append(personalization)
+        return new_agent_result("V4", text="只读讲解")
+
+    def fake_organizer(message: str, *, personalization, **_kwargs):
+        organizer_profiles.append(personalization)
+        return new_agent_result("V3", text="等待保存材料")
+
+    monkeypatch.setattr(workflow_module, "_classify_turn", fake_classifier)
+    monkeypatch.setattr(workflow_module, "invoke_v4_coach", fake_coach)
+    monkeypatch.setattr(workflow_module, "invoke_v3", fake_organizer)
+
+    coached = workflow_module.chat_v4(
+        "解释光合作用",
+        "profile-coach",
+        personalization=synthetic_personalization,
+    )
+    organized = workflow_module.chat_v4(
+        "请整理并保存这道错题",
+        "profile-organizer",
+        personalization=synthetic_personalization,
+    )
+
+    assert coached["error"] is None
+    assert organized["error"] is None
+    assert coach_profiles == [synthetic_personalization]
+    assert organizer_profiles == [synthetic_personalization]
+    assert classifier_calls
+    assert all("personalization" not in call for call in classifier_calls)
+    public_results = repr([coached, organized])
+    assert "SOUL-WORKFLOW-SENTINEL" not in public_results
+    assert "OWNER-WORKFLOW-SENTINEL" not in public_results
+    assert "personalization" not in workflow_module.WorkflowState.__annotations__
+    checkpoints = [
+        *saver.list({"configurable": {"thread_id": "profile-coach"}}),
+        *saver.list({"configurable": {"thread_id": "profile-organizer"}}),
+    ]
+    checkpoint_text = repr(checkpoints)
+    assert "SOUL-WORKFLOW-SENTINEL" not in checkpoint_text
+    assert "OWNER-WORKFLOW-SENTINEL" not in checkpoint_text
+
+
+def test_v4_owner_value_may_be_visible_now_but_never_persisted_or_classified(
+    isolated_graph,
+    monkeypatch: pytest.MonkeyPatch,
+    synthetic_personalization: AgentPersonalization,
+) -> None:
+    sentinel = synthetic_personalization.owner.preferred_name
+    assert sentinel is not None
+    saver = InMemorySaver()
+    monkeypatch.setattr(
+        workflow_module,
+        "_V4_GRAPH",
+        workflow_module.build_v4_graph(checkpointer=saver),
+    )
+    classifier_histories: list[list[dict]] = []
+    replies = iter([f"你好，{sentinel}", "继续回答。"])
+
+    def fake_classifier(message: str, *, history, **_kwargs):
+        classifier_histories.append(list(history))
+        return workflow_module.TurnDecision(
+            intent="answer",
+            confidence=1.0,
+            evidence="",
+            explicit_write=False,
+            topic_switch=False,
+            answer_status="none",
+            problem_summary=None,
+        )
+
+    monkeypatch.setattr(workflow_module, "_classify_turn", fake_classifier)
+    monkeypatch.setattr(
+        workflow_module,
+        "invoke_v4_coach",
+        lambda message, **_kwargs: new_agent_result(
+            "V4",
+            text=next(replies),
+        ),
+    )
+
+    first = workflow_module.chat_v4(
+        "第一问",
+        "owner-output-isolation",
+        personalization=synthetic_personalization,
+    )
+    second = workflow_module.chat_v4(
+        "第二问",
+        "owner-output-isolation",
+        personalization=synthetic_personalization,
+    )
+
+    assert first["text"] == f"你好，{sentinel}"
+    assert second["error"] is None
+    assert len(classifier_histories) == 2
+    assert sentinel not in repr(classifier_histories[1])
+    checkpoints = list(
+        saver.list(
+            {"configurable": {"thread_id": "owner-output-isolation"}}
+        )
+    )
+    assert sentinel not in repr(checkpoints)
+
+
+def test_v4_manual_note_fact_is_visible_but_checkpoint_stores_only_projection(
+    isolated_graph,
+    monkeypatch: pytest.MonkeyPatch,
+    synthetic_personalization: AgentPersonalization,
+) -> None:
+    sentinel = "ORBIT-NOTE-SENTINEL"
+    profile = replace(
+        synthetic_personalization,
+        owner=replace(
+            synthetic_personalization.owner,
+            manual_notes=f"My private coach code is {sentinel}.",
+        ),
+    )
+    saver = InMemorySaver()
+    monkeypatch.setattr(
+        workflow_module,
+        "_V4_GRAPH",
+        workflow_module.build_v4_graph(checkpointer=saver),
+    )
+    monkeypatch.setattr(
+        workflow_module,
+        "_classify_turn",
+        lambda *_args, **_kwargs: workflow_module.TurnDecision(
+            intent="answer",
+            confidence=1.0,
+            evidence="",
+            explicit_write=False,
+            topic_switch=False,
+            answer_status="none",
+            problem_summary=None,
+        ),
+    )
+    monkeypatch.setattr(
+        workflow_module,
+        "invoke_v4_coach",
+        lambda message, **_kwargs: new_agent_result(
+            "V4",
+            text=f"Your code is {sentinel}.",
+        ),
+    )
+
+    result = workflow_module.chat_v4(
+        "What is my code?",
+        "manual-note-output-isolation",
+        personalization=profile,
+    )
+
+    assert result["text"] == f"Your code is {sentinel}."
+    checkpoints = list(
+        saver.list(
+            {"configurable": {"thread_id": "manual-note-output-isolation"}}
+        )
+    )
+    assert sentinel not in repr(checkpoints)
+
+
+def test_v4_reloads_runtime_personalization_for_next_message(
+    isolated_graph,
+    monkeypatch: pytest.MonkeyPatch,
+    synthetic_personalization: AgentPersonalization,
+) -> None:
+    profiles = [
+        replace(synthetic_personalization, soul_markdown="V4-PROFILE-A"),
+        replace(synthetic_personalization, soul_markdown="V4-PROFILE-B"),
+    ]
+    seen_profiles: list[AgentPersonalization] = []
+    monkeypatch.setattr(
+        workflow_module,
+        "load_personalization",
+        lambda: profiles.pop(0),
+    )
+    monkeypatch.setattr(
+        workflow_module,
+        "_classify_turn",
+        lambda *_args, **_kwargs: workflow_module.TurnDecision(
+            intent="answer",
+            confidence=1.0,
+            evidence="",
+            explicit_write=False,
+            topic_switch=False,
+            answer_status="none",
+            problem_summary=None,
+        ),
+    )
+
+    def fake_coach(message: str, *, personalization, **_kwargs):
+        seen_profiles.append(personalization)
+        return new_agent_result("V4", text=f"回答：{message}")
+
+    monkeypatch.setattr(workflow_module, "invoke_v4_coach", fake_coach)
+
+    first = workflow_module.chat_v4("第一问", "profile-hot-reload")
+    second = workflow_module.chat_v4("第二问", "profile-hot-reload")
+
+    assert first["error"] is None
+    assert second["error"] is None
+    assert [profile.soul_markdown for profile in seen_profiles] == [
+        "V4-PROFILE-A",
+        "V4-PROFILE-B",
+    ]
+    assert profiles == []
+
+
+def test_v4_classifier_prompt_excludes_personalization_sentinels(
+    isolated_graph,
+    monkeypatch: pytest.MonkeyPatch,
+    synthetic_personalization: AgentPersonalization,
+) -> None:
+    captured_prompts: list[object] = []
+
+    class ClassifierModel:
+        def with_structured_output(self, _schema):
+            return self
+
+        def invoke(self, messages):
+            captured_prompts.append(messages)
+            return SimpleNamespace(
+                intent="answer",
+                confidence=1.0,
+                evidence="",
+                explicit_write=False,
+                topic_switch=False,
+                answer_status="none",
+                problem_summary=None,
+            )
+
+    monkeypatch.setattr(workflow_module, "get_llm", lambda: ClassifierModel())
+    monkeypatch.setattr(
+        workflow_module,
+        "invoke_v4_coach",
+        lambda message, **_kwargs: new_agent_result("V4", text="普通回答"),
+    )
+
+    result = workflow_module.chat_v4(
+        "普通问题",
+        "classifier-profile-isolation",
+        personalization=synthetic_personalization,
+    )
+
+    assert result["error"] is None
+    serialized_prompts = repr(captured_prompts)
+    assert "SOUL-WORKFLOW-SENTINEL" not in serialized_prompts
+    assert "OWNER-WORKFLOW-SENTINEL" not in serialized_prompts
+
+
+def test_v4_review_generator_prompt_excludes_personalization_sentinels(
+    isolated_graph,
+    monkeypatch: pytest.MonkeyPatch,
+    synthetic_personalization: AgentPersonalization,
+) -> None:
+    records_root, _report_path = isolated_graph
+    _write_mistake(records_root)
+    records = discover_mistake_records(records_root)
+    captured_prompts: list[object] = []
+
+    class ReviewModel:
+        def with_structured_output(self, _schema):
+            return self
+
+        def invoke(self, messages):
+            captured_prompts.append(messages)
+            return SimpleNamespace(
+                summary="需要复习现在完成时。",
+                patterns=["容易忽略累计次数线索。"],
+                action_steps=["先圈出次数表达。"],
+                practice_item=SimpleNamespace(
+                    question="I ____ (visit) Shanghai four times.",
+                    expected_answer="have visited",
+                    reasoning="four times 表示累计次数。",
+                    subject="english",
+                    topic="present-perfect",
+                    source_record_ids=["mistake-test"],
+                ),
+            )
+
+    monkeypatch.setattr(workflow_module, "get_llm", lambda: ReviewModel())
+
+    draft = workflow_module._generate_review_draft(records)
+
+    assert draft.practice_item["source_record_ids"] == ["mistake-test"]
+    serialized_prompts = repr(captured_prompts)
+    assert synthetic_personalization.soul_markdown not in serialized_prompts
+    assert (
+        synthetic_personalization.owner.preferred_name not in serialized_prompts
+    )
+
+
+def test_v4_graph_disables_tracing_even_when_env_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    synthetic_personalization: AgentPersonalization,
+) -> None:
+    enabled_values: list[bool] = []
+
+    @contextmanager
+    def fake_tracing_context(*, enabled: bool):
+        enabled_values.append(enabled)
+        yield
+
+    graph = Mock()
+    graph.get_state.return_value = SimpleNamespace(values={}, next=())
+    graph.invoke.return_value = {
+        "last_reply": "ok",
+        "tool_calls": [],
+        "citations": [],
+        "trace": [],
+        "waiting_for": "student_message",
+        "error": None,
+    }
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+    monkeypatch.setattr(workflow_module, "tracing_context", fake_tracing_context)
+    monkeypatch.setattr(workflow_module, "_V4_GRAPH", graph)
+
+    result = workflow_module.chat_v4(
+        "普通问题",
+        "trace-isolation",
+        personalization=synthetic_personalization,
+    )
+
+    assert result["error"] is None
+    assert enabled_values == [False]
+    runtime_context = graph.invoke.call_args.kwargs["context"]
+    assert runtime_context.personalization is synthetic_personalization
 
 
 def test_v4_image_attachment_is_transient_across_all_checkpoints(
@@ -227,6 +627,7 @@ def test_v4_image_attachment_is_transient_across_all_checkpoints(
         history,
         practice_item=None,
         attachment=None,
+        personalization=None,
     ):
         coach_attachments.append(attachment)
         return new_agent_result(
@@ -577,7 +978,13 @@ def test_v4_attachment_only_does_not_inherit_organizing_write_authority(
     organizer_calls = []
     coach_attachments = []
 
-    def fake_organizer(message: str, *, history, attachment=None):
+    def fake_organizer(
+        message: str,
+        *,
+        history,
+        attachment=None,
+        personalization=None,
+    ):
         organizer_calls.append((message, attachment))
         return new_agent_result("V3", text="请继续提供要整理的材料。")
 
@@ -587,6 +994,7 @@ def test_v4_attachment_only_does_not_inherit_organizing_write_authority(
         history,
         practice_item=None,
         attachment=None,
+        personalization=None,
     ):
         coach_attachments.append(attachment)
         return new_agent_result("V4", text="我会只读分析这张图片。")
@@ -643,7 +1051,13 @@ def test_v4_explicit_organize_request_passes_same_turn_attachment(
     )
     organizer_attachments = []
 
-    def fake_organizer(message: str, *, history, attachment=None):
+    def fake_organizer(
+        message: str,
+        *,
+        history,
+        attachment=None,
+        personalization=None,
+    ):
         organizer_attachments.append(attachment)
         return new_agent_result("V3", text="已读取图片，等待补充错题信息。")
 
@@ -712,7 +1126,7 @@ def test_v4_only_explicit_organize_request_uses_write_agent(
         lambda message, **_kwargs: new_agent_result("V4", text="这是概念解释。"),
     )
 
-    def fake_organizer(message: str, *, history):
+    def fake_organizer(message: str, *, history, personalization=None):
         calls.append(message)
         return new_agent_result(
             "V3",
@@ -860,7 +1274,7 @@ def test_v4_partial_save_stops_queued_review(
     monkeypatch.setattr(
         workflow_module,
         "invoke_v3",
-        lambda message, *, history: new_agent_result(
+        lambda message, *, history, personalization=None: new_agent_result(
             "V3",
             text="第一题保存成功，第二题保存失败。",
             tool_calls=[
@@ -908,7 +1322,7 @@ def test_v4_explicit_composite_request_saves_then_reviews(
     monkeypatch.setattr(
         workflow_module,
         "invoke_v3",
-        lambda message, *, history: new_agent_result(
+        lambda message, *, history, personalization=None: new_agent_result(
             "V3",
             text="保存成功：student/mistakes/records/english/mistake-test.md",
             tool_calls=[{"name": "save_mistake", "args": {}}],

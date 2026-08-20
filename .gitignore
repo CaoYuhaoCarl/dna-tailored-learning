@@ -13,5 +13,7 @@ docs/
 student/**/progress.json
 student/**/artifacts/*.md
 !student/**/artifacts/README.md
+/student/SOUL.md
+/student/OWNER.md
 student/mistakes/records/
 student/reports/

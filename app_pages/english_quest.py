@@ -14,6 +14,8 @@ from src.skill_pages import (
     result_loaded_skill,
 )
 
+from app_pages.personalization_ui import render_owner_memory_result
+
 
 QUEST_ROOT = SKILLS_PATH / ENGLISH_QUEST_NAME
 QUEST_STATE_SCRIPT = QUEST_ROOT / "scripts" / "quest_state.py"
@@ -228,6 +230,11 @@ if last_error and last_attempt:
         st.write(last_attempt)
     with _chat_bubble("assistant"):
         st.error(f"这条消息没有发送成功。{last_error}")
+
+render_owner_memory_result(
+    st.session_state.english_quest_last_result,
+    state_key="english_quest",
+)
 
 if history:
     submitted_message = None

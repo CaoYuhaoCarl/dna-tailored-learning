@@ -8,11 +8,14 @@ from io import BytesIO
 import json
 from pathlib import Path
 import re
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 import unicodedata
 import warnings
 
 from PIL import Image, UnidentifiedImageError
+
+if TYPE_CHECKING:
+    from src.personalization import AgentPersonalization
 
 
 MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
@@ -245,6 +248,8 @@ class WorkflowRuntimeContext:
 
     attachment: ChatAttachment | None = None
     attachment_write_authorized: bool = False
+    personalization: AgentPersonalization | None = None
+    personalization_output: dict[str, str] | None = None
 
 
 def _safe_filename(value: Any) -> str:

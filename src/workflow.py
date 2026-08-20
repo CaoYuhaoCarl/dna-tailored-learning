@@ -12,6 +12,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import START, StateGraph
 from langgraph.runtime import Runtime
 from langgraph.types import Command, interrupt
+from langsmith import tracing_context
 from pydantic import BaseModel, Field
 
 from src.agents import invoke_v3, invoke_v4_coach
@@ -29,6 +30,12 @@ from src.model import (
     ModelConfigurationError,
     get_llm,
     validate_model_configuration,
+)
+from src.personalization import (
+    AgentPersonalization,
+    PersonalizationError,
+    load_personalization,
+    redact_owner_data,
 )
 from src.reporting import (
     LEARNING_REPORT_PATH,
@@ -577,6 +584,28 @@ def _finish_turn(
     }
 
 
+def _checkpoint_safe_personalized_result(
+    result: AgentResult,
+    runtime: Runtime[WorkflowRuntimeContext],
+) -> AgentResult:
+    """保留本轮可见回复，同时只把 OWNER 脱敏投影交给 checkpoint。"""
+
+    personalization = runtime.context.personalization
+    if personalization is None:
+        return result
+    safe_result = redact_owner_data(dict(result), personalization)
+    if result["text"].strip():
+        safe_result["text"] = redact_owner_data(
+            "[本轮个性化回答未持久化]",
+            personalization,
+        )
+    output = runtime.context.personalization_output
+    if output is not None:
+        output["visible_text"] = result["text"]
+        output["persisted_text"] = safe_result["text"]
+    return safe_result
+
+
 def _coach(
     state: WorkflowState,
     runtime: Runtime[WorkflowRuntimeContext],
@@ -589,8 +618,11 @@ def _coach(
     }
     if runtime.context.attachment is not None:
         coach_kwargs["attachment"] = runtime.context.attachment
+    if runtime.context.personalization is not None:
+        coach_kwargs["personalization"] = runtime.context.personalization
     result = invoke_v4_coach(state["current_message"], **coach_kwargs)
     result = sanitize_attachment_output(result, runtime.context.attachment)
+    result = _checkpoint_safe_personalized_result(result, runtime)
     return _finish_turn(state, result, node="coach", mode=state["mode"])
 
 
@@ -622,8 +654,11 @@ def _organize_mistakes(
     organizer_kwargs = {"history": state["messages"]}
     if runtime.context.attachment is not None:
         organizer_kwargs["attachment"] = runtime.context.attachment
+    if runtime.context.personalization is not None:
+        organizer_kwargs["personalization"] = runtime.context.personalization
     result = invoke_v3(state["current_message"], **organizer_kwargs)
     result = sanitize_attachment_output(result, runtime.context.attachment)
+    result = _checkpoint_safe_personalized_result(result, runtime)
     if result["error"]:
         return _finish_turn(state, result, node="organize_mistakes", mode="organizing")
     save_results = _save_results(result)
@@ -1132,6 +1167,7 @@ def chat_v4(
     thread_id: str,
     *,
     attachment: ChatAttachment | None = None,
+    personalization: AgentPersonalization | None = None,
 ) -> AgentResult:
     """启动或恢复同一 thread_id 的一轮 V4 长对话。"""
 
@@ -1152,33 +1188,41 @@ def chat_v4(
             )
         except (ChatSubmissionError, ModelConfigurationError) as exc:
             return new_agent_result("V4", error=str(exc))
+    try:
+        profile = personalization or load_personalization()
+    except PersonalizationError as exc:
+        return new_agent_result("V4", error=str(exc))
     config = {"configurable": {"thread_id": clean_thread_id}}
+    personalization_output: dict[str, str] = {}
     runtime_context = WorkflowRuntimeContext(
         attachment=attachment,
         attachment_write_authorized=(
             attachment is not None
             and mistake_write_requested(typed_message)
         ),
+        personalization=profile,
+        personalization_output=personalization_output,
     )
     try:
-        snapshot = _V4_GRAPH.get_state(config)
-        if snapshot.values:
-            if snapshot.next != ("wait_for_message",):
-                return new_agent_result(
-                    "V4",
-                    error="当前线程不在等待学生消息的状态，请稍后重试。",
+        with tracing_context(enabled=False):
+            snapshot = _V4_GRAPH.get_state(config)
+            if snapshot.values:
+                if snapshot.next != ("wait_for_message",):
+                    return new_agent_result(
+                        "V4",
+                        error="当前线程不在等待学生消息的状态，请稍后重试。",
+                    )
+                state = _V4_GRAPH.invoke(
+                    Command(resume=clean_message),
+                    config,
+                    context=runtime_context,
                 )
-            state = _V4_GRAPH.invoke(
-                Command(resume=clean_message),
-                config,
-                context=runtime_context,
-            )
-        else:
-            state = _V4_GRAPH.invoke(
-                _initial_state(clean_message, clean_thread_id),
-                config,
-                context=runtime_context,
-            )
+            else:
+                state = _V4_GRAPH.invoke(
+                    _initial_state(clean_message, clean_thread_id),
+                    config,
+                    context=runtime_context,
+                )
     except Exception as exc:
         return new_agent_result(
             "V4",
@@ -1187,9 +1231,17 @@ def chat_v4(
                 f"错误类型：{type(exc).__name__}。"
             ),
         )
+    persisted_text = state.get("last_reply", "")
+    visible_text = personalization_output.get("visible_text")
+    redacted_text = personalization_output.get("persisted_text")
+    if visible_text is not None and redacted_text is not None:
+        if persisted_text == redacted_text:
+            persisted_text = visible_text
+        elif redacted_text and redacted_text in persisted_text:
+            persisted_text = persisted_text.replace(redacted_text, visible_text, 1)
     return new_agent_result(
         "V4",
-        text=state.get("last_reply", ""),
+        text=persisted_text,
         tool_calls=state.get("tool_calls", []),
         citations=state.get("citations", []),
         trace=state.get("trace", []),

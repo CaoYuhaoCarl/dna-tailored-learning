@@ -1,6 +1,10 @@
 """跨版本共享的数据契约。"""
 
+from __future__ import annotations
+
 from typing import Any, Literal, TypedDict
+
+from src.personalization import OwnerMemoryUpdate
 
 
 class ChatMessage(TypedDict):
@@ -118,6 +122,8 @@ class AgentResult(TypedDict):
     trace: list[dict[str, Any]]
     waiting_for: str | None
     error: str | None
+    owner_memory_update: OwnerMemoryUpdate | None
+    owner_memory_error: str | None
 
 
 def new_agent_result(
@@ -129,6 +135,8 @@ def new_agent_result(
     trace: list[dict[str, Any]] | None = None,
     waiting_for: WaitingFor | None = None,
     error: str | None = None,
+    owner_memory_update: OwnerMemoryUpdate | None = None,
+    owner_memory_error: str | None = None,
 ) -> AgentResult:
     """创建字段完整的 Agent 结果。"""
 
@@ -140,4 +148,6 @@ def new_agent_result(
         "trace": list(trace or []),
         "waiting_for": waiting_for,
         "error": error,
+        "owner_memory_update": owner_memory_update,
+        "owner_memory_error": owner_memory_error,
     }

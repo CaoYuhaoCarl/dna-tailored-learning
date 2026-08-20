@@ -1,6 +1,7 @@
 from pathlib import Path
 from unittest.mock import Mock
 
+import pytest
 from streamlit.testing.v1 import AppTest
 
 import src.facade as facade_module
@@ -10,6 +11,101 @@ from src.schemas import new_agent_result
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.fixture(autouse=True)
+def _personalization_facade(monkeypatch):
+    state = {
+        "soul": {
+            "content": "# Agent 风格\n\n语气温和。",
+            "digest": "soul-1",
+        },
+        "owner": {
+            "content": "---\nschema_version: 1\nauto_memory: false\n---\n",
+            "digest": "owner-1",
+        },
+        "auto_memory": False,
+    }
+
+    def read_editor():
+        return {
+            "soul": state["soul"].copy(),
+            "owner": state["owner"].copy(),
+            "auto_memory": state["auto_memory"],
+        }
+
+    def save_document(kind, content, *, expected_digest):
+        key = kind.lower()
+        assert expected_digest == state[key]["digest"]
+        next_digest = f"{key}-{int(state[key]['digest'].split('-')[-1]) + 1}"
+        state[key] = {"content": content, "digest": next_digest}
+
+    def restore_template(kind, *, expected_digest):
+        key = kind.lower()
+        assert expected_digest == state[key]["digest"]
+        state[key] = {
+            "content": f"# {kind} 课程模板",
+            "digest": f"{key}-restored",
+        }
+
+    def set_memory(enabled, *, expected_owner_digest=None):
+        assert expected_owner_digest == state["owner"]["digest"]
+        state["auto_memory"] = enabled
+        state["owner"]["digest"] = "owner-toggle"
+
+    def clear_memory(*, expected_owner_digest=None):
+        assert expected_owner_digest == state["owner"]["digest"]
+        state["owner"]["digest"] = "owner-cleared"
+
+    initialize = Mock()
+    save = Mock(side_effect=save_document)
+    restore = Mock(side_effect=restore_template)
+    set_auto = Mock(side_effect=set_memory)
+    clear = Mock(side_effect=clear_memory)
+    monkeypatch.setattr(
+        facade_module,
+        "initialize_personalization",
+        initialize,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        facade_module,
+        "read_personalization_editor",
+        read_editor,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        facade_module,
+        "save_personalization_document",
+        save,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        facade_module,
+        "restore_personalization_template",
+        restore,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        facade_module,
+        "set_auto_memory",
+        set_auto,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        facade_module,
+        "clear_auto_memory",
+        clear,
+        raising=False,
+    )
+    return {
+        "state": state,
+        "initialize": initialize,
+        "save": save,
+        "restore": restore,
+        "set_auto": set_auto,
+        "clear": clear,
+    }
 
 
 def _ready_status() -> facade_module.AppStatus:
@@ -57,6 +153,10 @@ def _displayed_text(app: AppTest) -> str:
         for elements in element_groups
         for element in elements
     )
+
+
+def _widget_by_key(elements, key: str):
+    return next(element for element in elements if element.key == key)
 
 
 def test_home_loads_once_and_never_constructs_model(monkeypatch) -> None:
@@ -138,10 +238,21 @@ def test_home_shows_progress_recovery_and_configuration_steps(monkeypatch) -> No
     assert not app.exception
     assert "测试损坏进度" in app.warning[0].value
     assert "运行环境还差一步" in app.error[0].value
-    assert [expander.label for expander in app.expander] == [
-        "模型配置",
-        "家长修复步骤",
-    ]
+    expander_labels = [expander.label for expander in app.expander]
+    assert "模型配置" in expander_labels
+    assert "家长修复步骤" in expander_labels
+    assert any(
+        item.value == "Agent 个性化"
+        for item in app.subheader
+    )
+    assert any(
+        item.label == "编辑 SOUL.md"
+        for item in app.text_area
+    )
+    assert any(
+        item.label == "编辑 OWNER.md"
+        for item in app.text_area
+    )
     assert app.expander[0].proto.expanded is True
     assert "Python 3.11.x 至 3.14.x" in _displayed_text(app)
 
@@ -238,4 +349,94 @@ def test_home_keeps_saved_configuration_when_connection_test_fails(
     assert any(
         "配置已保存，但连接测试失败" in item.value
         for item in app.error
+    )
+
+
+def test_home_personalization_edits_require_explicit_actions(
+    monkeypatch,
+    _personalization_facade,
+) -> None:
+    monkeypatch.setattr(facade_module, "get_app_status", lambda: _ready_status())
+    monkeypatch.setattr(
+        facade_module,
+        "get_model_configuration",
+        lambda: {
+            "provider": "deepseek",
+            "configured_providers": ["deepseek"],
+        },
+    )
+
+    app = AppTest.from_file(PROJECT_ROOT / "app.py").run()
+
+    assert not app.exception
+    displayed = _displayed_text(app)
+    assert any(
+        item.value == "Agent 个性化"
+        for item in app.subheader
+    )
+    assert "发送给 DeepSeek" in displayed
+    assert "Git 忽略不等于加密" in displayed
+
+    soul_editor = _widget_by_key(
+        app.text_area,
+        "personalization_editor_soul",
+    )
+    soul_editor.set_value("# 新风格\n\n回答要简洁。").run()
+    _widget_by_key(app.button, "personalization_save_soul").click().run()
+
+    _personalization_facade["save"].assert_called_once_with(
+        "SOUL",
+        "# 新风格\n\n回答要简洁。",
+        expected_digest="soul-1",
+    )
+    assert not _personalization_facade["set_auto"].called
+
+    _widget_by_key(
+        app.toggle,
+        "personalization_auto_memory",
+    ).set_value(True).run()
+    assert any("确认开启即表示你同意" in item.value for item in app.info)
+    _widget_by_key(
+        app.button,
+        "personalization_save_auto_memory",
+    ).click().run()
+
+    _personalization_facade["set_auto"].assert_called_once_with(
+        True,
+        expected_owner_digest="owner-1",
+    )
+
+    _widget_by_key(
+        app.button,
+        "personalization_restore_soul",
+    ).click().run()
+    assert _widget_by_key(
+        app.button,
+        "personalization_confirm_restore_soul",
+    )
+    _widget_by_key(
+        app.button,
+        "personalization_confirm_restore_soul",
+    ).click().run()
+
+    _personalization_facade["restore"].assert_called_once_with(
+        "SOUL",
+        expected_digest="soul-2",
+    )
+
+    _widget_by_key(
+        app.button,
+        "personalization_request_clear_memory",
+    ).click().run()
+    assert _widget_by_key(
+        app.button,
+        "personalization_confirm_clear_memory",
+    )
+    _widget_by_key(
+        app.button,
+        "personalization_confirm_clear_memory",
+    ).click().run()
+
+    _personalization_facade["clear"].assert_called_once_with(
+        expected_owner_digest="owner-toggle",
     )
