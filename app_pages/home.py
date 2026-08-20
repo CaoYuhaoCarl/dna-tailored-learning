@@ -14,6 +14,8 @@ from src.facade import (
 )
 from src.progress import ProgressDataError, default_progress, load_progress
 
+from app_pages.personalization_ui import render_personalization_settings
+
 
 st.set_page_config(
     page_title="学习 Agent",
@@ -182,6 +184,14 @@ if st.session_state.progress_error:
 app_status = get_app_status()
 app_status = render_model_configuration(app_status)
 render_runtime_status(app_status)
+
+current_provider = app_status["model_provider"]
+current_provider_label = (
+    PROVIDER_LABELS.get(current_provider, current_provider)
+    if current_provider
+    else None
+)
+render_personalization_settings(current_provider_label)
 
 lesson_names = {"lesson_1": "第一课", "lesson_2": "第二课"}
 metric_columns = st.columns(3)

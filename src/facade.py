@@ -27,6 +27,22 @@ from src.model import (
     save_model_configuration as _save_model_configuration,
     validate_model_configuration,
 )
+from src.personalization import (
+    AgentPersonalization,
+    OwnerMemoryUpdate,
+    PersonalizationDocument,
+    PersonalizationError,
+    clear_owner_memory as _clear_owner_memory,
+    extract_and_update_owner_memory,
+    initialize_personalization as _initialize_personalization,
+    load_personalization,
+    parse_owner_markdown,
+    read_personalization_document as _read_personalization_document,
+    restore_personalization_template as _restore_personalization_template,
+    save_personalization_document as _save_personalization_document,
+    set_owner_auto_memory as _set_owner_auto_memory,
+    undo_owner_memory_update as _undo_owner_memory_update,
+)
 from src.python_support import (
     SUPPORTED_PYTHON_LABEL,
     is_supported_python_series,
@@ -70,6 +86,14 @@ class LessonArtifactChange(TypedDict):
     diff: str
 
 
+class PersonalizationEditorSnapshot(TypedDict):
+    """首页一次读取的 SOUL、OWNER 编辑快照。"""
+
+    soul: PersonalizationDocument
+    owner: PersonalizationDocument
+    auto_memory: bool
+
+
 LessonArtifactError = ArtifactError
 
 
@@ -88,6 +112,10 @@ class _LessonArtifactSpec:
 _REQUIRED_APP_FILES = (
     ".python-version",
     "student/prompt.md",
+    "student/templates/SOUL.md",
+    "student/templates/OWNER.md",
+    "student/SOUL.md",
+    "student/OWNER.md",
     "student/skill/english-quest/SKILL.md",
     "student/skill/english-quest/scripts/quest_state.py",
     "student/skill/english-quest/assets/detective-board.svg",
@@ -276,9 +304,117 @@ def save_lesson_artifact(
     }
 
 
+def initialize_personalization() -> AgentPersonalization:
+    """首次创建并校验本机 SOUL、OWNER 文件。"""
+
+    return _initialize_personalization()
+
+
+def read_personalization_editor() -> PersonalizationEditorSnapshot:
+    """返回首页编辑器所需的原文、摘要和持久开关。"""
+
+    _initialize_personalization()
+    soul = _read_personalization_document("SOUL")
+    owner = _read_personalization_document("OWNER")
+    return {
+        "soul": soul,
+        "owner": owner,
+        "auto_memory": parse_owner_markdown(owner.content).auto_memory,
+    }
+
+
+def save_personalization_document(
+    kind: str,
+    content: str,
+    *,
+    expected_digest: str,
+) -> PersonalizationDocument:
+    """摘要安全地保存首页 SOUL/OWNER 草稿。"""
+
+    _initialize_personalization()
+    normalized = kind.strip().upper() if isinstance(kind, str) else ""
+    if normalized == "OWNER":
+        current = _read_personalization_document("OWNER")
+        if current.digest == expected_digest:
+            current_profile = parse_owner_markdown(current.content)
+            submitted_profile = parse_owner_markdown(content)
+            if submitted_profile.auto_memory != current_profile.auto_memory:
+                raise PersonalizationError(
+                    "请使用独立的自动记忆开关修改 auto_memory。"
+                )
+    return _save_personalization_document(
+        normalized,
+        content,
+        expected_digest=expected_digest,
+    )
+
+
+def restore_personalization_template(
+    kind: str,
+    *,
+    expected_digest: str,
+) -> PersonalizationDocument:
+    """在摘要仍匹配时恢复随课程提供的安全模板。"""
+
+    _initialize_personalization()
+    return _restore_personalization_template(
+        kind,
+        expected_digest=expected_digest,
+    )
+
+
+def set_auto_memory(
+    enabled: bool,
+    *,
+    expected_owner_digest: str | None = None,
+) -> PersonalizationDocument:
+    """只通过明确的首页授权修改自动记忆开关。"""
+
+    _initialize_personalization()
+    owner = _read_personalization_document("OWNER")
+    return _set_owner_auto_memory(
+        enabled,
+        expected_digest=(
+            owner.digest
+            if expected_owner_digest is None
+            else expected_owner_digest
+        ),
+    )
+
+
+def clear_auto_memory(
+    *,
+    expected_owner_digest: str | None = None,
+) -> PersonalizationDocument:
+    """清空受管学习资料，保留开关和 OWNER 手写正文。"""
+
+    _initialize_personalization()
+    owner = _read_personalization_document("OWNER")
+    return _clear_owner_memory(
+        expected_digest=(
+            owner.digest
+            if expected_owner_digest is None
+            else expected_owner_digest
+        ),
+    )
+
+
+def undo_owner_memory_update(
+    update: OwnerMemoryUpdate,
+) -> PersonalizationDocument:
+    """摘要匹配时撤销一次自动记忆字段更新。"""
+
+    return _undo_owner_memory_update(update)
+
+
 def get_app_status() -> AppStatus:
     """检查首页运行条件，且不创建模型或发起外部请求。"""
 
+    personalization_error: str | None = None
+    try:
+        _initialize_personalization()
+    except PersonalizationError as exc:
+        personalization_error = str(exc)
     missing_files = [
         relative_path
         for relative_path in _REQUIRED_APP_FILES
@@ -296,6 +432,8 @@ def get_app_status() -> AppStatus:
 
     python_version = platform.python_version()
     runtime_errors: list[str] = []
+    if personalization_error is not None:
+        runtime_errors.append(personalization_error)
     if recommended_python_version:
         recommended_series = parse_python_series(recommended_python_version)
         if (
@@ -371,6 +509,30 @@ def test_model_connection() -> AgentResult:
     return invoke_v0("请只回复：连接成功")
 
 
+def _record_owner_memory_after_success(
+    result: AgentResult,
+    message: str,
+    personalization: AgentPersonalization,
+) -> AgentResult:
+    """正常回答成功后尝试更新记忆，失败只写入独立警告字段。"""
+
+    if result["error"] is not None or not result["text"].strip():
+        return result
+    try:
+        result["owner_memory_update"] = extract_and_update_owner_memory(
+            message,
+            personalization,
+        )
+    except (PersonalizationError, ModelConfigurationError) as exc:
+        result["owner_memory_error"] = str(exc)
+    except Exception as exc:
+        result["owner_memory_error"] = (
+            "自动记忆提取或保存失败，正常回答不受影响。"
+            f"错误类型：{type(exc).__name__}。"
+        )
+    return result
+
+
 def chat_v4(
     message: str,
     thread_id: str,
@@ -379,9 +541,28 @@ def chat_v4(
 ) -> AgentResult:
     """启动或恢复由 LangGraph checkpoint 管理的 V4 长对话。"""
 
+    try:
+        personalization = load_personalization()
+    except PersonalizationError as exc:
+        return new_agent_result("V4", error=str(exc))
     if attachment is None:
-        return _chat_v4(message, thread_id)
-    return _chat_v4(message, thread_id, attachment=attachment)
+        result = _chat_v4(
+            message,
+            thread_id,
+            personalization=personalization,
+        )
+    else:
+        result = _chat_v4(
+            message,
+            thread_id,
+            attachment=attachment,
+            personalization=personalization,
+        )
+    return _record_owner_memory_after_success(
+        result,
+        message,
+        personalization,
+    )
 
 
 def invoke(
@@ -398,24 +579,64 @@ def invoke(
         if attachment is not None:
             return invoke_v0(message, attachment=attachment)
         return invoke_v0(message)
+    if normalized_stage not in {"V1", "V2", "V3"}:
+        display_stage = normalized_stage or "UNKNOWN"
+        return new_agent_result(
+            display_stage,
+            error=(
+                "当前版本仅支持 V0、V1、V2 和 V3，"
+                f"收到的阶段为 {display_stage}。"
+            ),
+        )
+    try:
+        personalization = load_personalization()
+    except PersonalizationError as exc:
+        return new_agent_result(normalized_stage, error=str(exc))
     if normalized_stage == "V1":
         if attachment is not None:
-            return invoke_v1(message, history=history, attachment=attachment)
-        return invoke_v1(message, history=history)
-    if normalized_stage == "V2":
+            result = invoke_v1(
+                message,
+                history=history,
+                attachment=attachment,
+                personalization=personalization,
+            )
+        else:
+            result = invoke_v1(
+                message,
+                history=history,
+                personalization=personalization,
+            )
+    elif normalized_stage == "V2":
         if attachment is not None:
-            return invoke_v2(message, history=history, attachment=attachment)
-        return invoke_v2(message, history=history)
-    if normalized_stage == "V3":
+            result = invoke_v2(
+                message,
+                history=history,
+                attachment=attachment,
+                personalization=personalization,
+            )
+        else:
+            result = invoke_v2(
+                message,
+                history=history,
+                personalization=personalization,
+            )
+    else:
         if attachment is not None:
-            return invoke_v3(message, history=history, attachment=attachment)
-        return invoke_v3(message, history=history)
+            result = invoke_v3(
+                message,
+                history=history,
+                attachment=attachment,
+                personalization=personalization,
+            )
+        else:
+            result = invoke_v3(
+                message,
+                history=history,
+                personalization=personalization,
+            )
 
-    display_stage = normalized_stage or "UNKNOWN"
-    return new_agent_result(
-        display_stage,
-        error=(
-            "当前版本仅支持 V0、V1、V2 和 V3，"
-            f"收到的阶段为 {display_stage}。"
-        ),
+    return _record_owner_memory_after_success(
+        result,
+        message,
+        personalization,
     )

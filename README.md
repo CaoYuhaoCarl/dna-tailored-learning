@@ -72,6 +72,57 @@ V0 到 V4 共用该设置，不需要为每个 Agent 单独配置模型。
 
 不要把真实 API Key 写入源码或 Notebook。
 
+## Agent 个性化与安全记忆
+
+首次启动会从 `student/templates/SOUL.md` 和 `student/templates/OWNER.md` 创建本机文件 `student/SOUL.md` 和 `student/OWNER.md`。
+如果本机文件已经存在，程序不会覆盖它。
+首次创建的文件权限只允许当前用户读写。
+两个本机文件都被 Git 忽略，但 Git 忽略不等于加密，请勿在 OWNER 中保存密码、密钥或其他秘密。
+
+`SOUL.md` 用普通 Markdown 描述 Agent 名称、语气、表达习惯和默认回答方式。
+SOUL 只影响表达，不能授予工具权限、放宽写入条件或覆盖课程和 Workflow 的安全规则。
+
+`OWNER.md` 使用 `schema_version: 1` YAML Frontmatter 保存受管资料，正文保留用户手写备注。
+受管字段固定为 `auto_memory`、`preferred_name`、`grade_band`、`languages`、`interests`、`learning_goals`、`strengths`、`challenges` 和 `response_preferences`。
+程序将 OWNER 解析成事实数据，而不是执行其中的指令。
+Agent 只在当前问题相关时使用这些资料，不主动复述，也不猜测缺失信息。
+
+V1 到 V4 在每个用户回合开始时重新读取 `prompt.md` 或 `v4-prompt.md`、`SOUL.md` 和 `OWNER.md`。
+因此，在首页保存个性化文件后，下一条消息就会使用新内容，不需要重启应用。
+每个回合只使用一份不可变快照，聊天运行时不把完整 SOUL 或 OWNER 复制进聊天 Session 状态、对话历史或 LangGraph checkpoint。
+首页编辑器中的未保存草稿只作为当前页面的控件状态存在，不会成为模型上下文；模型始终从已保存文件创建本轮快照。
+实现继续使用 LangChain [`create_agent` 的静态 `system_prompt`](https://reference.langchain.com/python/langchain/agents/factory/create_agent)，不引入额外的动态 Prompt middleware。
+V0、V4 意图分类器、复盘生成器以及固定安全和确认文案不读取个性化文件，以保持教学基线和确定性的写入授权。
+
+首页的“Agent 个性化”区域可以编辑、保存、放弃修改或从模板恢复 SOUL 和 OWNER，也可以开关自动记忆和清空受管记忆。
+清空操作只删除受管资料，不删除 OWNER 的手写正文。
+自动记忆默认关闭。
+用户只有在阅读“内容会发送给当前模型供应商”的提示并主动开启后，程序才会处理记忆候选。
+V1 到 V4 的个性化回答本身也会把组装后的 SOUL 和 OWNER 上下文发送给当前模型供应商，因此 OWNER 应只保存完成学习辅导所需的低敏资料。
+
+开启自动记忆后，程序只检查本轮聊天框内由用户键入的纯文本，并仅在出现中英文第一人称稳定资料时增加一次结构化模型提取。
+附件、聊天历史、SOUL、OWNER 手写正文和用户行为不会作为提取来源。
+自动记忆只允许称呼、年级段、语言、兴趣、学习目标、优势、学习挑战和回答偏好等低敏学习资料。
+联系方式、精确位置、学校、证件、账号或密钥、健康、财务和生物识别信息会被拒绝。
+成功更新后，聊天页面会显示本轮字段变化并提供一次撤销；如果 OWNER 已被手工修改，撤销会拒绝覆盖，并提示回到首页处理。
+自动提取或写入失败不会丢失已经生成的正常回答，页面会单独提示记忆没有更新。
+
+即使宿主设置了 `LANGSMITH_TRACING=true`，包含 SOUL 或 OWNER 的 V1 到 V4 调用和自动记忆提取也会显式关闭 LangSmith tracing。
+关闭方式遵循 LangSmith 的[条件追踪说明](https://docs.langchain.com/langsmith/conditional-tracing)。
+OWNER 不参与知识检索查询、意图分类、工具参数、引用、公开 trace、日志或 V4 checkpoint。
+工具执行前还有 Python 层资料守卫；如果模型把仅来自 OWNER 的值带入参数，工具会拒绝执行，公开工具记录也会脱敏。
+V4 会把本轮原始回答展示给用户，但只把 OWNER 脱敏后的回答投影写入 checkpoint 和下一轮分类历史。
+
+个性化文件必须是 `student/` 目录下不超过 32 KiB 的 UTF-8 普通文件。
+程序拒绝符号链接、目录、越界文件、空白 SOUL、无效 OWNER Schema 和并发保存冲突。
+如果读取校验失败，程序会先停止本轮模型调用，避免在资料状态不明确时继续回答。
+请在首页根据错误提示修复文件，或使用“从模板恢复”创建有效内容。
+遇到摘要冲突时先放弃页面中的旧草稿并重新加载，再把需要的修改应用到最新版本。
+如果模板本身缺失，请从完整课程安装包恢复 `student/templates/`，不要用包含真实个人资料的文件代替模板。
+
+当前存储模型面向本机单用户课程应用。
+如果将应用部署成多人服务，必须先改成按登录身份隔离的存储，不能让多个用户共享同一份 OWNER。
+
 ## 聊天附件
 
 两节课的聊天框每次最多上传一个 JPG、PNG、TXT 或 MD 附件，前端和后端都将单个附件限制为 5 MB。
@@ -114,9 +165,9 @@ RUN_DEEPSEEK_INTEGRATION=1 python -m pytest tests/integration/test_v0_connectivi
 
 ## V1 Agent Prompt
 
-V1 每次调用都会重新读取 `student/prompt.md`。
+V1 每次调用都会重新读取 `student/prompt.md`、`student/SOUL.md` 和 `student/OWNER.md`。
 
-修改并保存该文件后，只需重新运行教师 Notebook 中的 V1 调用单元格，即可观察回答方式的变化。
+修改并保存其中任一文件后，只需重新运行教师 Notebook 中的 V1 调用单元格，即可观察回答方式的变化。
 
 Notebook 的“一问一答式 V1”单元格会持续保存本次对话历史。
 

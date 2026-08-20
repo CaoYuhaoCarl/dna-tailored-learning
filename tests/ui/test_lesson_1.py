@@ -382,3 +382,73 @@ def test_lesson_1_compares_each_stages_latest_reply(monkeypatch) -> None:
     replies = [markdown.value for markdown in app.markdown]
     assert any("V0 的回答" in reply for reply in replies)
     assert any("V1 的回答" in reply for reply in replies)
+
+
+def test_lesson_1_shows_memory_changes_and_undoes_once(monkeypatch) -> None:
+    _, _, invoke, _, _ = _configure_page(monkeypatch)
+    update = {
+        "changes": [
+            {
+                "field": "interests",
+                "action": "add",
+                "before": [],
+                "after": ["天文"],
+            }
+        ],
+        "before_digest": "owner-before",
+        "after_digest": "owner-after",
+    }
+    invoke.return_value = new_agent_result(
+        "V1",
+        text="我记住了，我们从天文例子开始。",
+        owner_memory_update=update,
+    )
+    undo = Mock()
+    monkeypatch.setattr(
+        facade_module,
+        "undo_owner_memory_update",
+        undo,
+        raising=False,
+    )
+
+    app = AppTest.from_file(PAGE_PATH).run()
+    app.segmented_control[0].set_value("V1").run()
+    app.chat_input[0].set_value("我喜欢天文").run()
+
+    assert not app.exception
+    assert any(
+        "兴趣（新增）：从 未记录 改为 天文" in item.value
+        for item in app.markdown
+    )
+    undo_button = _widget_by_label(app.button, "撤销这次记忆更新")
+    undo_button.click().run()
+
+    undo.assert_called_once_with(update)
+    assert any("这次记忆更新已撤销" in item.value for item in app.success)
+    assert not any(
+        button.label == "撤销这次记忆更新"
+        for button in app.button
+    )
+
+
+def test_lesson_1_warns_when_memory_fails_after_answer(monkeypatch) -> None:
+    _, _, invoke, _, _ = _configure_page(monkeypatch)
+    invoke.return_value = new_agent_result(
+        "V1",
+        text="正常回答仍然保留。",
+        owner_memory_error="OWNER 文件刚刚被手工修改。",
+    )
+
+    app = AppTest.from_file(PAGE_PATH).run()
+    app.segmented_control[0].set_value("V1").run()
+    app.chat_input[0].set_value("我喜欢天文").run()
+
+    assert not app.exception
+    assert app.session_state["lesson1_histories"]["V1"][-1] == {
+        "role": "assistant",
+        "content": "正常回答仍然保留。",
+    }
+    assert any(
+        "助手已经正常回答，但自动记忆没有更新" in item.value
+        for item in app.warning
+    )

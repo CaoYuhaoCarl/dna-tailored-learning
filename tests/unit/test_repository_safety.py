@@ -35,6 +35,30 @@ def test_sensitive_files_are_ignored() -> None:
     assert ".ipynb_checkpoints/" in ignored_entries
     assert ".streamlit/secrets.toml" in ignored_entries
     assert "student/reports/" in ignored_entries
+    assert "/student/SOUL.md" in ignored_entries
+    assert "/student/OWNER.md" in ignored_entries
+
+
+def test_personalization_templates_are_tracked_but_live_files_are_ignored() -> None:
+    for live_file in ("student/SOUL.md", "student/OWNER.md"):
+        result = subprocess.run(
+            ["git", "check-ignore", "--quiet", live_file],
+            cwd=PROJECT_ROOT,
+            check=False,
+        )
+        assert result.returncode == 0, live_file
+
+    for template in (
+        "student/templates/SOUL.md",
+        "student/templates/OWNER.md",
+    ):
+        assert (PROJECT_ROOT / template).is_file()
+        result = subprocess.run(
+            ["git", "check-ignore", "--quiet", template],
+            cwd=PROJECT_ROOT,
+            check=False,
+        )
+        assert result.returncode == 1, template
 
 
 def test_teacher_environment_uses_jupyterlab_only() -> None:
