@@ -19,6 +19,7 @@ from src.artifacts import (
     read_markdown,
     read_skill,
 )
+from src.chat_submission import ChatAttachment
 from src.model import (
     ModelConfigurationError,
     ModelConfigurationSummary,
@@ -370,10 +371,17 @@ def test_model_connection() -> AgentResult:
     return invoke_v0("请只回复：连接成功")
 
 
-def chat_v4(message: str, thread_id: str) -> AgentResult:
+def chat_v4(
+    message: str,
+    thread_id: str,
+    *,
+    attachment: ChatAttachment | None = None,
+) -> AgentResult:
     """启动或恢复由 LangGraph checkpoint 管理的 V4 长对话。"""
 
-    return _chat_v4(message, thread_id)
+    if attachment is None:
+        return _chat_v4(message, thread_id)
+    return _chat_v4(message, thread_id, attachment=attachment)
 
 
 def invoke(
@@ -381,17 +389,26 @@ def invoke(
     message: str,
     *,
     history: Sequence[ChatMessage] | None = None,
+    attachment: ChatAttachment | None = None,
 ) -> AgentResult:
     """调用 V0 到 V3，V1-V3 可接收由界面保存的完整对话历史。"""
 
     normalized_stage = stage.strip().upper()
     if normalized_stage == "V0":
+        if attachment is not None:
+            return invoke_v0(message, attachment=attachment)
         return invoke_v0(message)
     if normalized_stage == "V1":
+        if attachment is not None:
+            return invoke_v1(message, history=history, attachment=attachment)
         return invoke_v1(message, history=history)
     if normalized_stage == "V2":
+        if attachment is not None:
+            return invoke_v2(message, history=history, attachment=attachment)
         return invoke_v2(message, history=history)
     if normalized_stage == "V3":
+        if attachment is not None:
+            return invoke_v3(message, history=history, attachment=attachment)
         return invoke_v3(message, history=history)
 
     display_stage = normalized_stage or "UNKNOWN"
