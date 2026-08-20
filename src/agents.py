@@ -22,7 +22,20 @@ from src.artifacts import (
     read_markdown,
     read_skill,
 )
-from src.model import ModelConfigurationError, get_llm
+from src.chat_submission import (
+    ChatAttachment,
+    ChatSubmissionError,
+    attachment_search_text,
+    mistake_write_requested,
+    model_message_content,
+    normalized_prompt_text,
+    sanitize_attachment_output,
+)
+from src.model import (
+    ModelConfigurationError,
+    get_llm,
+    validate_model_configuration,
+)
 from src.retrieval import (
     KNOWLEDGE_DIRECTORY,
     EvidenceField,
@@ -78,6 +91,16 @@ _MISTAKE_SCHEMA_VERSION = 1
 
 class ConversationHistoryError(ValueError):
     """Agent 对话历史不是完整的学生、教练消息对。"""
+
+
+def _current_user_content(
+    message: str,
+    attachment: ChatAttachment | None,
+) -> str | list[dict[str, Any]]:
+    if attachment is None:
+        return message
+    provider = validate_model_configuration()
+    return model_message_content(message, attachment, provider=provider)
 
 
 def _response_text(content: Any) -> str:
@@ -624,11 +647,13 @@ def _invoke_agent_with_tools(
     conversation: Sequence[ChatMessage],
     system_prompt: str,
     tools: Sequence[Any],
+    attachment: ChatAttachment | None = None,
     citations: list[Citation] | None = None,
     trace: list[dict[str, Any]] | None = None,
 ) -> AgentResult:
     """运行一次 Agent，并保留允许公开的工具调用和确定性写入结果。"""
 
+    user_content = _current_user_content(message, attachment)
     agent = create_agent(
         model=get_llm(),
         tools=list(tools),
@@ -638,7 +663,7 @@ def _invoke_agent_with_tools(
         {
             "messages": [
                 *conversation,
-                {"role": "user", "content": message},
+                {"role": "user", "content": user_content},
             ]
         }
     )
@@ -654,13 +679,14 @@ def _invoke_agent_with_tools(
             stage,
             error=f"{stage} 返回了空内容，请稍后重试。",
         )
-    return new_agent_result(
+    result = new_agent_result(
         stage,
         text=text,
         tool_calls=_tool_calls_from_messages(messages),
         citations=citations,
         trace=[*(trace or []), *_save_tool_result_trace(messages)],
     )
+    return sanitize_attachment_output(result, attachment)
 
 
 def _invoke_skill_agent(
@@ -670,6 +696,8 @@ def _invoke_skill_agent(
     conversation: Sequence[ChatMessage],
     system_prompt: str,
     skills: Sequence[SkillMetadata],
+    allow_writes: bool,
+    attachment: ChatAttachment | None = None,
     citations: list[Citation] | None = None,
     trace: list[dict[str, Any]] | None = None,
     extra_tools: Sequence[Any] = (),
@@ -684,13 +712,20 @@ def _invoke_skill_agent(
         tools=[
             _create_load_skill_tool(skills),
             _create_load_mistake_file_tool(MISTAKES_INBOX_PATH),
-            _create_save_mistake_tool(
-                MISTAKES_RECORDS_PATH,
-                MISTAKES_RECORDS_PATH,
-                MISTAKES_INBOX_PATH,
+            *(
+                [
+                    _create_save_mistake_tool(
+                        MISTAKES_RECORDS_PATH,
+                        MISTAKES_RECORDS_PATH,
+                        MISTAKES_INBOX_PATH,
+                    )
+                ]
+                if allow_writes
+                else []
             ),
             *extra_tools,
         ],
+        attachment=attachment,
         citations=citations,
         trace=trace,
     )
@@ -750,16 +785,26 @@ def _finalize_knowledge_result(
     return result
 
 
-def invoke_v0(message: str) -> AgentResult:
+def invoke_v0(
+    message: str,
+    *,
+    attachment: ChatAttachment | None = None,
+) -> AgentResult:
     """直接调用所选模型，不挂载 Prompt、Skill、Knowledge 或 Workflow。"""
 
-    clean_message = message.strip()
+    clean_message = normalized_prompt_text(message, attachment)
     if not clean_message:
         return new_agent_result("V0", error="消息不能为空，请输入一个问题后重试。")
 
     try:
-        response = get_llm().invoke(clean_message)
-    except ModelConfigurationError as exc:
+        user_content = _current_user_content(clean_message, attachment)
+        if attachment is None:
+            response = get_llm().invoke(clean_message)
+        else:
+            response = get_llm().invoke(
+                [{"role": "user", "content": user_content}]
+            )
+    except (ChatSubmissionError, ModelConfigurationError) as exc:
         return new_agent_result("V0", error=str(exc))
     except Exception as exc:
         return new_agent_result(
@@ -776,7 +821,10 @@ def invoke_v0(message: str) -> AgentResult:
             "V0",
             error="模型返回了空内容，请稍后重试。",
         )
-    return new_agent_result("V0", text=text)
+    return sanitize_attachment_output(
+        new_agent_result("V0", text=text),
+        attachment,
+    )
 
 
 def invoke_v1(
@@ -784,16 +832,18 @@ def invoke_v1(
     prompt_path: str | Path = PROMPT_PATH,
     *,
     history: Sequence[ChatMessage] | None = None,
+    attachment: ChatAttachment | None = None,
 ) -> AgentResult:
     """实时读取学生 Prompt 和对话历史，完成一轮苏格拉底问答。"""
 
-    clean_message = message.strip()
+    clean_message = normalized_prompt_text(message, attachment)
     if not clean_message:
         return new_agent_result("V1", error="消息不能为空，请输入一个问题后重试。")
 
     try:
         conversation = _validated_history(history)
         system_prompt = read_markdown(prompt_path)
+        user_content = _current_user_content(clean_message, attachment)
         agent = create_agent(
             model=get_llm(),
             tools=[],
@@ -803,11 +853,16 @@ def invoke_v1(
             {
                 "messages": [
                     *conversation,
-                    {"role": "user", "content": clean_message},
+                    {"role": "user", "content": user_content},
                 ]
             }
         )
-    except (ArtifactError, ConversationHistoryError, ModelConfigurationError) as exc:
+    except (
+        ArtifactError,
+        ChatSubmissionError,
+        ConversationHistoryError,
+        ModelConfigurationError,
+    ) as exc:
         return new_agent_result("V1", error=str(exc))
     except Exception as exc:
         return new_agent_result(
@@ -827,7 +882,10 @@ def invoke_v1(
     text = _response_text(content)
     if not text:
         return new_agent_result("V1", error="V1 返回了空内容，请稍后重试。")
-    return new_agent_result("V1", text=text)
+    return sanitize_attachment_output(
+        new_agent_result("V1", text=text),
+        attachment,
+    )
 
 
 def invoke_v2(
@@ -836,10 +894,11 @@ def invoke_v2(
     skills_path: str | Path = SKILLS_PATH,
     *,
     history: Sequence[ChatMessage] | None = None,
+    attachment: ChatAttachment | None = None,
 ) -> AgentResult:
     """按需加载匹配的标准 SKILL.md，完成一轮 V2 对话。"""
 
-    clean_message = message.strip()
+    clean_message = normalized_prompt_text(message, attachment)
     if not clean_message:
         return new_agent_result("V2", error="消息不能为空，请输入一个问题后重试。")
 
@@ -853,8 +912,15 @@ def invoke_v2(
             conversation=conversation,
             system_prompt=_v2_system_prompt(base_prompt, skills),
             skills=skills,
+            attachment=attachment,
+            allow_writes=mistake_write_requested(message),
         )
-    except (ArtifactError, ConversationHistoryError, ModelConfigurationError) as exc:
+    except (
+        ArtifactError,
+        ChatSubmissionError,
+        ConversationHistoryError,
+        ModelConfigurationError,
+    ) as exc:
         return new_agent_result("V2", error=str(exc))
     except Exception as exc:
         return new_agent_result(
@@ -873,10 +939,11 @@ def invoke_v3(
     knowledge_path: str | Path = KNOWLEDGE_DIRECTORY,
     *,
     history: Sequence[ChatMessage] | None = None,
+    attachment: ChatAttachment | None = None,
 ) -> AgentResult:
     """在 V2 能力上自动检索知识卡，并返回可追溯引用。"""
 
-    clean_message = message.strip()
+    clean_message = normalized_prompt_text(message, attachment)
     if not clean_message:
         return new_agent_result(
             "V3",
@@ -888,6 +955,9 @@ def invoke_v3(
         base_prompt = read_markdown(prompt_path)
         skills = discover_skills(skills_path)
         query_parts = [clean_message]
+        attachment_text = attachment_search_text(attachment)
+        if attachment_text:
+            query_parts.append(attachment_text)
         if conversation:
             query_parts.insert(0, conversation[-2]["content"])
         candidates = retrieve_knowledge("\n".join(query_parts), knowledge_path)
@@ -897,13 +967,20 @@ def invoke_v3(
             conversation=conversation,
             system_prompt=_v3_system_prompt(base_prompt, skills, candidates),
             skills=skills,
+            attachment=attachment,
+            allow_writes=mistake_write_requested(message),
             extra_tools=(
                 (_create_use_knowledge_card_tool(candidates),)
                 if candidates
                 else ()
             ),
         )
-    except (ArtifactError, ConversationHistoryError, ModelConfigurationError) as exc:
+    except (
+        ArtifactError,
+        ChatSubmissionError,
+        ConversationHistoryError,
+        ModelConfigurationError,
+    ) as exc:
         return new_agent_result("V3", error=str(exc))
     except Exception as exc:
         return new_agent_result(
@@ -926,10 +1003,11 @@ def invoke_v4_coach(
     *,
     history: Sequence[ChatMessage] | None = None,
     practice_item: PracticeItem | None = None,
+    attachment: ChatAttachment | None = None,
 ) -> AgentResult:
     """运行不具备文件写入工具的 V4 全学科答疑 Agent。"""
 
-    clean_message = message.strip()
+    clean_message = normalized_prompt_text(message, attachment)
     if not clean_message:
         return new_agent_result(
             "V4",
@@ -939,6 +1017,9 @@ def invoke_v4_coach(
         conversation = _validated_history(history)
         base_prompt = read_markdown(prompt_path)
         query_parts = [clean_message]
+        attachment_text = attachment_search_text(attachment)
+        if attachment_text:
+            query_parts.append(attachment_text)
         if conversation:
             query_parts.insert(0, conversation[-2]["content"])
         candidates = retrieve_knowledge("\n".join(query_parts), knowledge_path)
@@ -955,8 +1036,14 @@ def invoke_v4_coach(
                 practice_item,
             ),
             tools=tools,
+            attachment=attachment,
         )
-    except (ArtifactError, ConversationHistoryError, ModelConfigurationError) as exc:
+    except (
+        ArtifactError,
+        ChatSubmissionError,
+        ConversationHistoryError,
+        ModelConfigurationError,
+    ) as exc:
         return new_agent_result("V4", error=str(exc))
     except Exception as exc:
         return new_agent_result(

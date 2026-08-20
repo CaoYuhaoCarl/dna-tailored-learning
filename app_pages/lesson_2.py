@@ -6,6 +6,12 @@ from uuid import uuid4
 
 import streamlit as st
 
+from src.chat_submission import (
+    ACCEPTED_FILE_TYPES,
+    MAX_ATTACHMENT_BYTES,
+    ChatSubmissionError,
+    parse_chat_submission,
+)
 from src.facade import chat_v4, invoke
 from src.progress import (
     ProgressDataError,
@@ -166,6 +172,8 @@ def _record_result(stage: str, message: str, result: dict) -> bool:
         return False
 
     reply = str(result.get("text") or result.get("error") or "本轮没有回复。")
+    if result.get("text") and result.get("error"):
+        reply = f"{reply}\n\n本轮未全部完成：{result['error']}"
     st.session_state.lesson2_histories[stage].extend(
         [
             {"role": "user", "content": message},
@@ -470,42 +478,81 @@ chat_placeholder = CHAT_PLACEHOLDERS[stage]
 if needs_review_decision:
     chat_placeholder = "请先选择一种复盘方式"
 
-chat_message = st.chat_input(
+chat_value = st.chat_input(
     chat_placeholder,
     key=f"lesson2_chat_{stage.lower()}",
     max_chars=8_000,
+    max_upload_size=MAX_ATTACHMENT_BYTES // (1024 * 1024),
+    accept_file=True,
+    file_type=list(ACCEPTED_FILE_TYPES),
     disabled=needs_review_decision,
     submit_mode="disable",
 )
-submitted_message = decision_message if decision_message is not None else chat_message
+raw_submission = decision_message if decision_message is not None else chat_value
 
-if submitted_message is not None:
-    clean_message = submitted_message.strip()
-    if not clean_message:
-        st.session_state.lesson2_last_attempts[stage] = submitted_message
-        st.session_state.lesson2_last_errors[stage] = "请输入内容后再发送。"
+if raw_submission is not None:
+    try:
+        submission = parse_chat_submission(raw_submission)
+    except ChatSubmissionError as exc:
+        raw_text = (
+            raw_submission
+            if isinstance(raw_submission, str)
+            else getattr(raw_submission, "text", "")
+        )
+        st.session_state.lesson2_last_attempts[stage] = (
+            raw_text.strip() or "附件提交"
+        )
+        st.session_state.lesson2_last_errors[stage] = str(exc)
         st.rerun()
 
-    st.session_state.lesson2_last_attempts[stage] = clean_message
+    st.session_state.lesson2_last_attempts[stage] = submission.display_text
     st.session_state.lesson2_last_errors[stage] = None
     with _chat_bubble("user"):
-        st.write(clean_message)
+        st.write(submission.display_text)
+        if submission.attachment and submission.attachment.is_image:
+            st.image(submission.attachment.data)
     with _chat_bubble("assistant"):
         with st.spinner("助手正在思考…", show_time=True):
             try:
                 if stage == "V3":
-                    result = invoke(
-                        "V3",
-                        clean_message,
-                        history=[item.copy() for item in history],
+                    conversation = [item.copy() for item in history]
+                    if submission.attachment is None:
+                        result = invoke(
+                            "V3",
+                            submission.text,
+                            history=conversation,
+                        )
+                    else:
+                        result = invoke(
+                            "V3",
+                            submission.text,
+                            history=conversation,
+                            attachment=submission.attachment,
+                        )
+                elif submission.attachment is None:
+                    result = chat_v4(
+                        submission.text,
+                        st.session_state.thread_id,
                     )
                 else:
-                    result = chat_v4(clean_message, st.session_state.thread_id)
+                    result = chat_v4(
+                        submission.text,
+                        st.session_state.thread_id,
+                        attachment=submission.attachment,
+                    )
             finally:
                 if decision_message is not None:
                     st.session_state.lesson2_pending_decision = None
                     st.session_state.lesson2_decision_in_flight = False
-        completed = _record_result(stage, clean_message, result)
+        if result.get("error") and submission.attachment is not None:
+            result = {
+                **result,
+                "error": (
+                    f"{result['error']} "
+                    "附件未保留，请重新选择附件后发送。"
+                ),
+            }
+        completed = _record_result(stage, submission.display_text, result)
         if completed:
             st.write(result.get("text") or result.get("error"))
             if result.get("error"):

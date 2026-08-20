@@ -1,16 +1,30 @@
+from base64 import b64decode
 from pathlib import Path
 from unittest.mock import Mock, call
 
 import pytest
+from streamlit.proto.ChatInput_pb2 import ChatInput as ChatInputProto
 from streamlit.testing.v1 import AppTest
 
+import src.chat_submission as chat_submission_module
 import src.facade as facade_module
 import src.progress as progress_module
+from src.chat_submission import (
+    ACCEPTED_FILE_TYPES,
+    MAX_ATTACHMENT_BYTES,
+    ChatAttachment,
+    ChatSubmission,
+    ChatSubmissionError,
+)
 from src.schemas import new_agent_result
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PAGE_PATH = PROJECT_ROOT / "app_pages" / "lesson_2.py"
+_TINY_PNG = b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8A"
+    "AQUBAScY42YAAAAASUVORK5CYII="
+)
 
 
 def _configure_page(monkeypatch):
@@ -41,6 +55,17 @@ def _widget_by_label(elements, label: str):
     return next(element for element in elements if element.label == label)
 
 
+def _image_submission(*, text: str = "") -> ChatSubmission:
+    return ChatSubmission(
+        text=text,
+        attachment=ChatAttachment(
+            name="question.png",
+            media_type="image/png",
+            data=_TINY_PNG,
+        ),
+    )
+
+
 def test_lesson_2_non_chat_actions_never_call_agents(monkeypatch) -> None:
     invoke, chat_v4, load_progress, save_progress = _configure_page(monkeypatch)
 
@@ -55,6 +80,13 @@ def test_lesson_2_non_chat_actions_never_call_agents(monkeypatch) -> None:
     assert len(app.main.chat_message) == 1
     assert not app.sidebar.chat_message
     assert app.chat_input[0].placeholder == "问知识点，或发送一道具体题"
+    assert app.chat_input[0].proto.accept_file == ChatInputProto.SINGLE
+    assert list(app.chat_input[0].proto.file_type) == [
+        f".{extension}" for extension in ACCEPTED_FILE_TYPES
+    ]
+    assert app.chat_input[0].proto.max_upload_size_mb == (
+        MAX_ATTACHMENT_BYTES // (1024 * 1024)
+    )
     thread_id = app.session_state["thread_id"]
     assert thread_id.startswith("student-")
     invoke.assert_not_called()
@@ -222,6 +254,88 @@ def test_lesson_2_v4_uses_one_thread_and_separate_visible_history(
     assert save_progress.call_count == 2
 
 
+def test_lesson_2_v3_attachment_is_forwarded_once_and_history_is_text_only(
+    monkeypatch,
+) -> None:
+    invoke, chat_v4, _, save_progress = _configure_page(monkeypatch)
+    submission = _image_submission(text="请看图里的题目")
+    parser = Mock(return_value=submission)
+    monkeypatch.setattr(chat_submission_module, "parse_chat_submission", parser)
+    invoke.return_value = new_agent_result("V3", text="先观察图里的已知条件。")
+    app = AppTest.from_file(PAGE_PATH).run()
+
+    app.chat_input[0].set_value("测试附件提交").run()
+
+    assert not app.exception
+    parser.assert_called_once()
+    invoke.assert_called_once_with(
+        "V3",
+        "请看图里的题目",
+        history=[],
+        attachment=submission.attachment,
+    )
+    chat_v4.assert_not_called()
+    save_progress.assert_called_once()
+    assert app.session_state["lesson2_histories"]["V3"] == [
+        {
+            "role": "user",
+            "content": "请看图里的题目\n\n附件：question.png",
+        },
+        {"role": "assistant", "content": "先观察图里的已知条件。"},
+    ]
+
+    app.run()
+
+    assert invoke.call_count == 1
+
+
+def test_lesson_2_attachment_parse_error_never_calls_agents_or_saves_progress(
+    monkeypatch,
+) -> None:
+    invoke, chat_v4, _, save_progress = _configure_page(monkeypatch)
+    parser = Mock(side_effect=ChatSubmissionError("附件内容已经损坏。"))
+    monkeypatch.setattr(chat_submission_module, "parse_chat_submission", parser)
+    app = AppTest.from_file(PAGE_PATH).run()
+
+    app.chat_input[0].set_value("尝试上传附件").run()
+
+    assert not app.exception
+    parser.assert_called_once()
+    invoke.assert_not_called()
+    chat_v4.assert_not_called()
+    save_progress.assert_not_called()
+    assert app.session_state["lesson2_histories"]["V3"] == []
+    assert "附件内容已经损坏" in app.error[0].value
+
+
+def test_lesson_2_v4_attachment_model_error_requires_reselection(
+    monkeypatch,
+) -> None:
+    _, chat_v4, _, save_progress = _configure_page(monkeypatch)
+    submission = _image_submission()
+    monkeypatch.setattr(
+        chat_submission_module,
+        "parse_chat_submission",
+        Mock(return_value=submission),
+    )
+    chat_v4.return_value = new_agent_result("V4", error="工作流暂时无法恢复。")
+    app = AppTest.from_file(PAGE_PATH).run()
+    app.segmented_control[0].set_value("V4").run()
+    thread_id = app.session_state["thread_id"]
+
+    app.chat_input[0].set_value("测试附件失败").run()
+
+    assert not app.exception
+    chat_v4.assert_called_once_with(
+        "",
+        thread_id,
+        attachment=submission.attachment,
+    )
+    assert app.session_state["lesson2_histories"]["V4"] == []
+    assert "附件未保留，请重新选择附件后发送" in app.error[0].value
+    save_progress.assert_not_called()
+
+
 def test_lesson_2_uses_verified_evidence_and_save_results(monkeypatch) -> None:
     _, chat_v4, _, _ = _configure_page(monkeypatch)
     chat_v4.return_value = new_agent_result(
@@ -360,11 +474,45 @@ def test_lesson_2_v4_completed_error_stays_aligned_with_workflow(
         {"role": "user", "content": "总结复盘"},
         {
             "role": "assistant",
-            "content": "报告格式损坏，本次没有更新报告。",
+            "content": (
+                "报告格式损坏，本次没有更新报告。\n\n"
+                "本轮未全部完成：错题记录格式损坏。"
+            ),
         },
     ]
     assert app.session_state["lesson2_last_attempts"]["V4"] is None
     assert any("错题记录格式损坏" in item.value for item in app.warning)
+    save_progress.assert_not_called()
+
+
+def test_lesson_2_v4_completed_attachment_error_keeps_reselection_notice(
+    monkeypatch,
+) -> None:
+    _, chat_v4, _, save_progress = _configure_page(monkeypatch)
+    submission = _image_submission()
+    monkeypatch.setattr(
+        chat_submission_module,
+        "parse_chat_submission",
+        Mock(return_value=submission),
+    )
+    chat_v4.return_value = new_agent_result(
+        "V4",
+        text="图片已经分析，但整理没有完成。",
+        waiting_for="student_message",
+        error="错题信息不足。",
+    )
+    app = AppTest.from_file(PAGE_PATH).run()
+    app.segmented_control[0].set_value("V4").run()
+
+    app.chat_input[0].set_value("测试附件部分失败").run()
+    app.run()
+
+    history = app.session_state["lesson2_histories"]["V4"]
+    assert "附件未保留，请重新选择附件后发送" in history[-1]["content"]
+    assert any(
+        "附件未保留，请重新选择附件后发送" in item.value
+        for item in app.markdown
+    )
     save_progress.assert_not_called()
 
 

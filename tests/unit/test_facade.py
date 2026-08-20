@@ -5,6 +5,7 @@ import pytest
 
 import src.facade as facade_module
 from src.artifacts import ArtifactError
+from src.chat_submission import create_chat_attachment
 from src.model import ModelConfigurationError
 from src.schemas import ChatMessage, new_agent_result
 
@@ -16,6 +17,64 @@ def test_invoke_rejects_unavailable_stage() -> None:
     assert result["error"] == (
         "当前版本仅支持 V0、V1、V2 和 V3，收到的阶段为 V4。"
     )
+
+
+def test_invoke_routes_v0_without_attachment_using_legacy_signature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = new_agent_result("V0", text="V0 回复")
+    invoke_v0 = Mock(return_value=expected)
+    monkeypatch.setattr(facade_module, "invoke_v0", invoke_v0)
+
+    result = facade_module.invoke("V0", "测试")
+
+    assert result is expected
+    invoke_v0.assert_called_once_with("测试")
+
+
+@pytest.mark.parametrize(
+    ("stage", "function_name"),
+    [
+        ("V0", "invoke_v0"),
+        ("V1", "invoke_v1"),
+        ("V2", "invoke_v2"),
+        ("V3", "invoke_v3"),
+    ],
+)
+def test_invoke_exactly_forwards_attachment_for_v0_to_v3(
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+    function_name: str,
+) -> None:
+    attachment = create_chat_attachment(
+        name="notes.txt",
+        media_type="text/plain",
+        data=b"attachment body",
+    )
+    expected = new_agent_result(stage, text=f"{stage} 回复")
+    target = Mock(return_value=expected)
+    monkeypatch.setattr(facade_module, function_name, target)
+    history: list[ChatMessage] = [
+        {"role": "user", "content": "上一问"},
+        {"role": "assistant", "content": "上一答"},
+    ]
+
+    result = facade_module.invoke(
+        stage,
+        "测试",
+        history=history,
+        attachment=attachment,
+    )
+
+    assert result is expected
+    if stage == "V0":
+        target.assert_called_once_with("测试", attachment=attachment)
+    else:
+        target.assert_called_once_with(
+            "测试",
+            history=history,
+            attachment=attachment,
+        )
 
 
 def test_invoke_routes_v1(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -100,6 +159,36 @@ def test_chat_v4_delegates_to_workflow(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert result is expected
     assert received == ("继续", "student-1")
+
+
+def test_chat_v4_exactly_forwards_attachment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attachment = create_chat_attachment(
+        name="notes.md",
+        media_type="text/markdown",
+        data=b"# attachment body",
+    )
+    expected = new_agent_result(
+        "V4",
+        text="V4 回复",
+        waiting_for="student_message",
+    )
+    chat_v4 = Mock(return_value=expected)
+    monkeypatch.setattr(facade_module, "_chat_v4", chat_v4)
+
+    result = facade_module.chat_v4(
+        "继续",
+        "student-1",
+        attachment=attachment,
+    )
+
+    assert result is expected
+    chat_v4.assert_called_once_with(
+        "继续",
+        "student-1",
+        attachment=attachment,
+    )
 
 
 def test_model_configuration_facade_never_adds_secret_fields(

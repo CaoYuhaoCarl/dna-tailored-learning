@@ -10,11 +10,26 @@ from typing import Literal
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import START, StateGraph
+from langgraph.runtime import Runtime
 from langgraph.types import Command, interrupt
 from pydantic import BaseModel, Field
 
 from src.agents import invoke_v3, invoke_v4_coach
-from src.model import ModelConfigurationError, get_llm
+from src.chat_submission import (
+    ChatAttachment,
+    ChatSubmissionError,
+    WorkflowRuntimeContext,
+    ensure_attachment_supported,
+    mistake_write_requested,
+    model_message_content,
+    normalized_prompt_text,
+    sanitize_attachment_output,
+)
+from src.model import (
+    ModelConfigurationError,
+    get_llm,
+    validate_model_configuration,
+)
 from src.reporting import (
     LEARNING_REPORT_PATH,
     NoMistakeRecordsError,
@@ -49,7 +64,27 @@ _COMPOSITE_PATTERN = re.compile(
     r"(?:整理|保存).{0,10}(?:后|并|再).{0,6}(?:总结)?复盘"
     r"|先整理.{0,12}(?:再|后).{0,4}复盘"
 )
+_EXPLICIT_REVIEW_REQUEST_PATTERN = re.compile(
+    r"^(?:"
+    r"请(?:你)?(?:帮我|替我|给我)?"
+    r"|麻烦(?:你)?(?:帮我|替我|给我)?"
+    r"|能不能(?:帮我|替我|给我)?"
+    r"|可以(?:请你)?(?:帮我|替我|给我)?"
+    r"|帮我|替我|给我|我要|我想|现在|开始"
+    r")?"
+    r"(?:"
+    r"(?:重新)?(?:总结|生成|更新|整理)(?:一下)?(?:一份|一篇)?"
+    r"|做(?:个|一份|一篇)?"
+    r")"
+    r"(?:本次|这次|当前|我的)?(?:学习)?复盘(?:报告)?"
+    r"(?:一下|好吗|可以吗|行吗|吗|吧|。|！|!|？|\?)*$"
+)
 _META_OR_UNSAFE_MARKERS = (
+    "别",
+    "勿",
+    "不是",
+    "注意",
+    "命令",
     "什么意思",
     "是什么意思",
     "怎么",
@@ -74,19 +109,24 @@ _META_OR_UNSAFE_MARKERS = (
     "”",
     '"',
 )
-_DIRECT_REQUEST_MARKERS = (
-    "请",
-    "帮我",
+_AMBIGUOUS_WRITE_QUESTION_PREFIXES = (
     "我要",
     "我想",
     "现在",
     "开始",
-    "给我",
-    "替我",
-    "麻烦",
-    "把",
-    "可以",
-    "能不能",
+    "整理",
+    "保存",
+    "收集",
+    "归档",
+    "总结",
+    "复盘",
+    "生成",
+    "更新",
+)
+_AMBIGUOUS_REVIEW_QUESTION_PREFIXES = (
+    *_AMBIGUOUS_WRITE_QUESTION_PREFIXES,
+    "重新",
+    "做",
 )
 _CANCEL_MESSAGES = {
     "取消",
@@ -173,15 +213,17 @@ def _normalized_command(message: str) -> str:
     return command.removeprefix("请")
 
 
-def _is_direct_request(message: str, pattern: re.Pattern[str]) -> bool:
-    if _unsafe_write_context(message) or pattern.search(message) is None:
-        return False
-    clean_message = message.strip().lstrip("，。！？,.!? ")
-    if clean_message.startswith(
-        ("整理", "保存", "收集", "归档", "总结", "复盘", "生成", "更新")
+def _explicit_review_requested(message: str) -> bool:
+    """只允许完整、肯定的学生文本授权生成复盘。"""
+
+    compact_message = "".join(message.split())
+    without_end_punctuation = compact_message.rstrip("。！!？?")
+    if compact_message.startswith(_AMBIGUOUS_REVIEW_QUESTION_PREFIXES) and (
+        compact_message.endswith(("？", "?"))
+        or without_end_punctuation.endswith("吗")
     ):
-        return True
-    return any(marker in message for marker in _DIRECT_REQUEST_MARKERS)
+        return False
+    return bool(_EXPLICIT_REVIEW_REQUEST_PATTERN.fullmatch(compact_message))
 
 
 def _decision(
@@ -208,6 +250,7 @@ def _classify_turn(
     mode: WorkflowMode,
     active_problem: str | None,
     practice_item: PracticeItem | None,
+    attachment: ChatAttachment | None = None,
 ) -> TurnDecision:
     """让模型分类自然表达，并保留执行写入所需的原文证据。"""
 
@@ -219,6 +262,16 @@ def _classify_turn(
         "recent_history": history[-6:],
         "current_message": message,
     }
+    serialized_context = json.dumps(context, ensure_ascii=False)
+    user_content = (
+        model_message_content(
+            serialized_context,
+            attachment,
+            provider=validate_model_configuration(),
+        )
+        if attachment is not None
+        else serialized_context
+    )
     result = classifier.invoke(
         [
             {
@@ -239,18 +292,23 @@ def _classify_turn(
             },
             {
                 "role": "user",
-                "content": json.dumps(context, ensure_ascii=False),
+                "content": user_content,
             },
         ]
+    )
+    safe_evidence = sanitize_attachment_output(result.evidence.strip(), attachment)
+    safe_problem_summary = sanitize_attachment_output(
+        (result.problem_summary or "").strip(),
+        attachment,
     )
     return TurnDecision(
         intent=result.intent,
         confidence=result.confidence,
-        evidence=result.evidence.strip(),
+        evidence=safe_evidence,
         explicit_write=result.explicit_write,
         topic_switch=result.topic_switch,
         answer_status=result.answer_status,
-        problem_summary=(result.problem_summary or "").strip() or None,
+        problem_summary=safe_problem_summary or None,
     )
 
 
@@ -274,7 +332,10 @@ def _request_id(state: WorkflowState, message: str, turn_index: int) -> str:
     return "review-" + sha256(material.encode("utf-8")).hexdigest()[:16]
 
 
-def _route_turn(state: WorkflowState) -> dict:
+def _route_turn(
+    state: WorkflowState,
+    runtime: Runtime[WorkflowRuntimeContext],
+) -> dict:
     message = state["current_message"].strip()
     command = _normalized_command(message)
     turn_index = state["turn_index"] + 1
@@ -282,14 +343,16 @@ def _route_turn(state: WorkflowState) -> dict:
     pending_review = state["pending_review"]
     skip_unsaved = state["skip_unsaved_for_review"]
     review_request_id = state["review_request_id"]
+    explicit_mistake_write = mistake_write_requested(message)
+    explicit_composite_write = bool(
+        explicit_mistake_write and _COMPOSITE_PATTERN.search(message)
+    )
+    explicit_review = _explicit_review_requested(message)
 
     if command in _CANCEL_MESSAGES:
         decision = _decision("cancel", evidence=message)
     elif mode == "review_decision":
-        if command in _SAVE_THEN_REVIEW_MESSAGES or _is_direct_request(
-            message,
-            _COMPOSITE_PATTERN,
-        ):
+        if command in _SAVE_THEN_REVIEW_MESSAGES or explicit_composite_write:
             decision = _decision(
                 "organize_mistakes",
                 evidence=message,
@@ -303,7 +366,7 @@ def _route_turn(state: WorkflowState) -> dict:
             skip_unsaved = True
         else:
             decision = _decision("clarify")
-    elif _is_direct_request(message, _COMPOSITE_PATTERN):
+    elif explicit_composite_write:
         decision = _decision(
             "organize_mistakes",
             evidence=message,
@@ -312,13 +375,13 @@ def _route_turn(state: WorkflowState) -> dict:
         pending_review = True
         skip_unsaved = False
         review_request_id = _request_id(state, message, turn_index)
-    elif _is_direct_request(message, _ORGANIZE_PATTERN):
+    elif explicit_mistake_write:
         decision = _decision(
             "organize_mistakes",
             evidence=message,
             explicit_write=True,
         )
-    elif _is_direct_request(message, _REVIEW_PATTERN):
+    elif explicit_review:
         decision = _decision("review", evidence=message, explicit_write=True)
         pending_review = False
         skip_unsaved = False
@@ -328,6 +391,8 @@ def _route_turn(state: WorkflowState) -> dict:
         for pattern in (_COMPOSITE_PATTERN, _ORGANIZE_PATTERN, _REVIEW_PATTERN)
     ):
         decision = _decision("clarify")
+    elif mode == "organizing" and runtime.context.attachment is not None:
+        decision = _decision("tutor")
     elif mode == "organizing":
         decision = _decision(
             "organize_mistakes",
@@ -336,21 +401,44 @@ def _route_turn(state: WorkflowState) -> dict:
         )
     else:
         try:
-            decision = _validated_model_decision(
-                message,
-                _classify_turn(
-                    message,
-                    history=state["messages"],
-                    mode=mode,
-                    active_problem=state["active_problem"],
-                    practice_item=state["practice_item"],
+            classify_kwargs = {
+                "history": state["messages"],
+                "mode": mode,
+                "active_problem": state["active_problem"],
+                "practice_item": state["practice_item"],
+            }
+            if runtime.context.attachment is not None:
+                classify_kwargs["attachment"] = runtime.context.attachment
+            model_decision = _classify_turn(message, **classify_kwargs)
+            model_decision = TurnDecision(
+                intent=model_decision.intent,
+                confidence=model_decision.confidence,
+                evidence=sanitize_attachment_output(
+                    model_decision.evidence,
+                    runtime.context.attachment,
+                ),
+                explicit_write=model_decision.explicit_write,
+                topic_switch=model_decision.topic_switch,
+                answer_status=model_decision.answer_status,
+                problem_summary=sanitize_attachment_output(
+                    model_decision.problem_summary,
+                    runtime.context.attachment,
                 ),
             )
+            decision = _validated_model_decision(message, model_decision)
+            if (
+                decision.intent == "organize_mistakes"
+                and not explicit_mistake_write
+            ) or (decision.intent == "review" and not explicit_review):
+                decision = _decision("clarify")
         except (ModelConfigurationError, ValueError) as exc:
             decision = _decision("clarify")
             return {
                 "intent": decision.intent,
-                "error": str(exc),
+                "error": sanitize_attachment_output(
+                    str(exc),
+                    runtime.context.attachment,
+                ),
                 "turn_index": turn_index,
                 "tool_calls": [],
                 "citations": [],
@@ -377,6 +465,30 @@ def _route_turn(state: WorkflowState) -> dict:
                     {"step": "route_turn", "status": "error"},
                 ],
             }
+
+    if runtime.context.attachment is not None:
+        attachment_review_authorized = bool(
+            explicit_review
+            or explicit_composite_write
+            or (
+                mode == "review_decision"
+                and command
+                in _SAVE_THEN_REVIEW_MESSAGES | _SKIP_THEN_REVIEW_MESSAGES
+            )
+        )
+        unauthorized_attachment_write = bool(
+            decision.intent == "organize_mistakes"
+            and not runtime.context.attachment_write_authorized
+        )
+        unauthorized_attachment_review = bool(
+            decision.intent == "review"
+            and not attachment_review_authorized
+        )
+        if unauthorized_attachment_write or unauthorized_attachment_review:
+            decision = _decision("tutor")
+            pending_review = state["pending_review"]
+            skip_unsaved = state["skip_unsaved_for_review"]
+            review_request_id = state["review_request_id"]
 
     active_problem = state["active_problem"]
     active_problem_has_error = state["active_problem_has_error"]
@@ -465,14 +577,20 @@ def _finish_turn(
     }
 
 
-def _coach(state: WorkflowState) -> dict:
-    result = invoke_v4_coach(
-        state["current_message"],
-        history=state["messages"],
-        practice_item=(
+def _coach(
+    state: WorkflowState,
+    runtime: Runtime[WorkflowRuntimeContext],
+) -> dict:
+    coach_kwargs = {
+        "history": state["messages"],
+        "practice_item": (
             state["practice_item"] if state["mode"] == "practice" else None
         ),
-    )
+    }
+    if runtime.context.attachment is not None:
+        coach_kwargs["attachment"] = runtime.context.attachment
+    result = invoke_v4_coach(state["current_message"], **coach_kwargs)
+    result = sanitize_attachment_output(result, runtime.context.attachment)
     return _finish_turn(state, result, node="coach", mode=state["mode"])
 
 
@@ -497,8 +615,15 @@ def _saved_record_ids(save_results: list[dict]) -> list[str]:
     return ids
 
 
-def _organize_mistakes(state: WorkflowState) -> dict:
-    result = invoke_v3(state["current_message"], history=state["messages"])
+def _organize_mistakes(
+    state: WorkflowState,
+    runtime: Runtime[WorkflowRuntimeContext],
+) -> dict:
+    organizer_kwargs = {"history": state["messages"]}
+    if runtime.context.attachment is not None:
+        organizer_kwargs["attachment"] = runtime.context.attachment
+    result = invoke_v3(state["current_message"], **organizer_kwargs)
+    result = sanitize_attachment_output(result, runtime.context.attachment)
     if result["error"]:
         return _finish_turn(state, result, node="organize_mistakes", mode="organizing")
     save_results = _save_results(result)
@@ -925,7 +1050,10 @@ def _wait_for_message(state: WorkflowState) -> dict:
 def build_v4_graph(*, checkpointer=None):
     """构建只有一个 interrupt 节点的 V4 StateGraph。"""
 
-    builder = StateGraph(WorkflowState)
+    builder = StateGraph(
+        WorkflowState,
+        context_schema=WorkflowRuntimeContext,
+    )
     builder.add_node("route_turn", _route_turn)
     builder.add_node("coach", _coach)
     builder.add_node("organize_mistakes", _organize_mistakes)
@@ -999,10 +1127,16 @@ def _initial_state(message: str, thread_id: str) -> WorkflowState:
 _V4_GRAPH = build_v4_graph()
 
 
-def chat_v4(message: str, thread_id: str) -> AgentResult:
+def chat_v4(
+    message: str,
+    thread_id: str,
+    *,
+    attachment: ChatAttachment | None = None,
+) -> AgentResult:
     """启动或恢复同一 thread_id 的一轮 V4 长对话。"""
 
-    clean_message = message.strip()
+    typed_message = message.strip()
+    clean_message = normalized_prompt_text(message, attachment)
     clean_thread_id = thread_id.strip()
     if not clean_message:
         return new_agent_result("V4", error="消息不能为空，请输入内容后重试。")
@@ -1010,7 +1144,22 @@ def chat_v4(message: str, thread_id: str) -> AgentResult:
         return new_agent_result("V4", error="thread_id 不能为空。")
     if len(clean_thread_id) > 128 or any(ord(char) < 32 for char in clean_thread_id):
         return new_agent_result("V4", error="thread_id 必须是不超过 128 个字符的可见文本。")
+    if attachment is not None and attachment.is_image:
+        try:
+            ensure_attachment_supported(
+                attachment,
+                provider=validate_model_configuration(),
+            )
+        except (ChatSubmissionError, ModelConfigurationError) as exc:
+            return new_agent_result("V4", error=str(exc))
     config = {"configurable": {"thread_id": clean_thread_id}}
+    runtime_context = WorkflowRuntimeContext(
+        attachment=attachment,
+        attachment_write_authorized=(
+            attachment is not None
+            and mistake_write_requested(typed_message)
+        ),
+    )
     try:
         snapshot = _V4_GRAPH.get_state(config)
         if snapshot.values:
@@ -1019,11 +1168,16 @@ def chat_v4(message: str, thread_id: str) -> AgentResult:
                     "V4",
                     error="当前线程不在等待学生消息的状态，请稍后重试。",
                 )
-            state = _V4_GRAPH.invoke(Command(resume=clean_message), config)
+            state = _V4_GRAPH.invoke(
+                Command(resume=clean_message),
+                config,
+                context=runtime_context,
+            )
         else:
             state = _V4_GRAPH.invoke(
                 _initial_state(clean_message, clean_thread_id),
                 config,
+                context=runtime_context,
             )
     except Exception as exc:
         return new_agent_result(

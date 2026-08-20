@@ -1,15 +1,29 @@
+from base64 import b64decode
 from pathlib import Path
 from unittest.mock import Mock
 
+from streamlit.proto.ChatInput_pb2 import ChatInput as ChatInputProto
 from streamlit.testing.v1 import AppTest
 
+import src.chat_submission as chat_submission_module
 import src.facade as facade_module
 import src.progress as progress_module
+from src.chat_submission import (
+    ACCEPTED_FILE_TYPES,
+    MAX_ATTACHMENT_BYTES,
+    ChatAttachment,
+    ChatSubmission,
+    ChatSubmissionError,
+)
 from src.schemas import new_agent_result
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PAGE_PATH = PROJECT_ROOT / "app_pages" / "lesson_1.py"
+_TINY_PNG = b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8A"
+    "AQUBAScY42YAAAAASUVORK5CYII="
+)
 
 
 def _artifact(stage: str, content: str, digest: str) -> facade_module.LessonArtifact:
@@ -71,6 +85,17 @@ def _widget_by_label(elements, label: str):
     return next(element for element in elements if element.label == label)
 
 
+def _image_submission(*, text: str = "") -> ChatSubmission:
+    return ChatSubmission(
+        text=text,
+        attachment=ChatAttachment(
+            name="question.png",
+            media_type="image/png",
+            data=_TINY_PNG,
+        ),
+    )
+
+
 def test_lesson_1_non_chat_actions_never_invoke_model(monkeypatch) -> None:
     _, save_artifact, invoke, load_progress, _ = _configure_page(monkeypatch)
 
@@ -86,6 +111,13 @@ def test_lesson_1_non_chat_actions_never_invoke_model(monkeypatch) -> None:
     assert len(app.main.chat_message) == 1
     assert not app.sidebar.chat_message
     assert app.chat_input[0].placeholder == "和原始普通AI聊天"
+    assert app.chat_input[0].proto.accept_file == ChatInputProto.SINGLE
+    assert list(app.chat_input[0].proto.file_type) == [
+        f".{extension}" for extension in ACCEPTED_FILE_TYPES
+    ]
+    assert app.chat_input[0].proto.max_upload_size_mb == (
+        MAX_ATTACHMENT_BYTES // (1024 * 1024)
+    )
     invoke.assert_not_called()
     save_artifact.assert_not_called()
     load_progress.assert_called_once_with()
@@ -230,6 +262,82 @@ def test_lesson_1_v0_chat_runs_without_saving_markdown(monkeypatch) -> None:
         "user",
         "assistant",
     ]
+
+
+def test_lesson_1_attachment_is_forwarded_once_and_history_keeps_only_display_text(
+    monkeypatch,
+) -> None:
+    _, save_artifact, invoke, _, save_progress = _configure_page(monkeypatch)
+    submission = _image_submission()
+    parser = Mock(return_value=submission)
+    monkeypatch.setattr(chat_submission_module, "parse_chat_submission", parser)
+    invoke.return_value = new_agent_result("V0", text="我看到了这道题。")
+    app = AppTest.from_file(PAGE_PATH).run()
+
+    app.chat_input[0].set_value("测试附件提交").run()
+
+    assert not app.exception
+    parser.assert_called_once()
+    invoke.assert_called_once_with(
+        "V0",
+        "",
+        history=[],
+        attachment=submission.attachment,
+    )
+    save_artifact.assert_not_called()
+    save_progress.assert_called_once()
+    assert app.session_state["lesson1_histories"]["V0"] == [
+        {"role": "user", "content": "附件：question.png"},
+        {"role": "assistant", "content": "我看到了这道题。"},
+    ]
+    assert app.session_state["lesson1_last_attempts"]["V0"] is None
+
+    app.run()
+
+    assert invoke.call_count == 1
+
+
+def test_lesson_1_attachment_parse_error_never_invokes_model_or_saves_progress(
+    monkeypatch,
+) -> None:
+    _, _, invoke, _, save_progress = _configure_page(monkeypatch)
+    parser = Mock(side_effect=ChatSubmissionError("附件类型不受支持。"))
+    monkeypatch.setattr(chat_submission_module, "parse_chat_submission", parser)
+    app = AppTest.from_file(PAGE_PATH).run()
+
+    app.chat_input[0].set_value("尝试上传附件").run()
+
+    assert not app.exception
+    parser.assert_called_once()
+    invoke.assert_not_called()
+    save_progress.assert_not_called()
+    assert app.session_state["lesson1_histories"]["V0"] == []
+    assert "附件类型不受支持" in app.error[0].value
+
+
+def test_lesson_1_attachment_model_error_requires_reselection(monkeypatch) -> None:
+    _, _, invoke, _, save_progress = _configure_page(monkeypatch)
+    submission = _image_submission(text="请看这道题")
+    monkeypatch.setattr(
+        chat_submission_module,
+        "parse_chat_submission",
+        Mock(return_value=submission),
+    )
+    invoke.return_value = new_agent_result("V0", error="模型暂时不可用。")
+    app = AppTest.from_file(PAGE_PATH).run()
+
+    app.chat_input[0].set_value("测试附件失败").run()
+
+    assert not app.exception
+    invoke.assert_called_once_with(
+        "V0",
+        "请看这道题",
+        history=[],
+        attachment=submission.attachment,
+    )
+    assert app.session_state["lesson1_histories"]["V0"] == []
+    assert "附件未保留，请重新选择附件后发送" in app.error[0].value
+    save_progress.assert_not_called()
 
 
 def test_lesson_1_compares_each_stages_latest_reply(monkeypatch) -> None:

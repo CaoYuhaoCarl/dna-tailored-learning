@@ -6,6 +6,12 @@ from difflib import unified_diff
 
 import streamlit as st
 
+from src.chat_submission import (
+    ACCEPTED_FILE_TYPES,
+    MAX_ATTACHMENT_BYTES,
+    ChatSubmissionError,
+    parse_chat_submission,
+)
 from src.facade import (
     LessonArtifactError,
     get_lesson_artifact,
@@ -400,32 +406,62 @@ chat_placeholder = STAGE_CHAT_PLACEHOLDERS[stage]
 if chat_disabled:
     chat_placeholder = "先重新读取助手的说明，再继续聊天"
 
-message = st.chat_input(
+raw_submission = st.chat_input(
     chat_placeholder,
     key=f"lesson1_chat_{stage.lower()}",
     max_chars=8_000,
+    max_upload_size=MAX_ATTACHMENT_BYTES // (1024 * 1024),
+    accept_file=True,
+    file_type=list(ACCEPTED_FILE_TYPES),
     disabled=chat_disabled,
     submit_mode="disable",
 )
 
-if message is not None:
-    clean_message = message.strip()
-    if not clean_message:
-        st.session_state.lesson1_last_attempts[stage] = message
-        st.session_state.lesson1_last_errors[stage] = "请输入内容后再发送。"
+if raw_submission is not None:
+    try:
+        submission = parse_chat_submission(raw_submission)
+    except ChatSubmissionError as exc:
+        raw_text = (
+            raw_submission
+            if isinstance(raw_submission, str)
+            else getattr(raw_submission, "text", "")
+        )
+        st.session_state.lesson1_last_attempts[stage] = (
+            raw_text.strip() or "附件提交"
+        )
+        st.session_state.lesson1_last_errors[stage] = str(exc)
         st.rerun()
 
-    st.session_state.lesson1_last_attempts[stage] = clean_message
+    st.session_state.lesson1_last_attempts[stage] = submission.display_text
     st.session_state.lesson1_last_errors[stage] = None
     with _chat_bubble("user"):
-        st.write(clean_message)
+        st.write(submission.display_text)
+        if submission.attachment and submission.attachment.is_image:
+            st.image(submission.attachment.data)
     with _chat_bubble("assistant"):
         with st.spinner("助手正在思考…", show_time=True):
-            result = invoke(
-                stage,
-                clean_message,
-                history=[item.copy() for item in history],
-            )
+            conversation = [item.copy() for item in history]
+            if submission.attachment is None:
+                result = invoke(
+                    stage,
+                    submission.text,
+                    history=conversation,
+                )
+            else:
+                result = invoke(
+                    stage,
+                    submission.text,
+                    history=conversation,
+                    attachment=submission.attachment,
+                )
+        if result["error"] and submission.attachment is not None:
+            result = {
+                **result,
+                "error": (
+                    f"{result['error']} "
+                    "附件未保留，请重新选择附件后发送。"
+                ),
+            }
         st.session_state.lesson1_last_results[stage] = result
         if result["error"]:
             st.session_state.lesson1_last_errors[stage] = result["error"]
@@ -433,5 +469,5 @@ if message is not None:
         else:
             st.write(result["text"])
             st.session_state.lesson1_last_attempts[stage] = None
-            _record_success(stage, clean_message, result)
+            _record_success(stage, submission.display_text, result)
     st.rerun()
