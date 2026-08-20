@@ -59,6 +59,56 @@ def test_v2_loads_and_saves_skill_for_structured_mistake(
 
 
 @pytest.mark.integration
+def test_v2_routes_english_quest_and_continues_from_history() -> None:
+    if os.getenv("RUN_MODEL_INTEGRATION") != "1":
+        pytest.skip("设置 RUN_MODEL_INTEGRATION=1 后才调用真实模型。")
+
+    opening_message = "我们玩一个侦探闯关游戏练现在完成时。"
+    opening = invoke("V2", opening_message)
+
+    assert opening["error"] is None, opening["error"]
+    assert opening["text"].strip()
+    assert [
+        call.get("args", {}).get("skill_name")
+        for call in opening["tool_calls"]
+        if call.get("name") == "load_skill"
+    ] == ["english-quest"]
+    assert not [
+        call
+        for call in opening["tool_calls"]
+        if call.get("name") == "save_mistake"
+    ]
+    assert opening["text"].count("?") + opening["text"].count("？") <= 1
+
+    history = [
+        {"role": "user", "content": opening_message},
+        {"role": "assistant", "content": opening["text"]},
+    ]
+    continuation = invoke("V2", "B", history=history)
+
+    assert continuation["error"] is None, continuation["error"]
+    assert continuation["text"].strip()
+    assert [
+        call.get("args", {}).get("skill_name")
+        for call in continuation["tool_calls"]
+        if call.get("name") == "load_skill"
+    ] == ["english-quest"]
+    question_marks = continuation["text"].count("?")
+    question_marks += continuation["text"].count("？")
+    assert question_marks <= 1
+
+    ordinary = invoke("V2", "什么是现在完成时？")
+
+    assert ordinary["error"] is None, ordinary["error"]
+    assert ordinary["text"].strip()
+    assert not [
+        call
+        for call in ordinary["tool_calls"]
+        if call.get("name") == "load_skill"
+    ]
+
+
+@pytest.mark.integration
 def test_v2_reads_file_and_saves_every_mistake(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

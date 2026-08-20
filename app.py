@@ -21,6 +21,11 @@ page = st.navigation(
             title="第二课：名师智能体与个性化智能体",
             icon=":material/psychology:",
         ),
+        st.Page(
+            "app_pages/english_quest.py",
+            title="英语剧情闯关",
+            icon=":material/stadia_controller:",
+        ),
     ],
     position="sidebar",
 )

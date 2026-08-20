@@ -1,6 +1,7 @@
 from io import StringIO
 from pathlib import Path
 import stat
+from subprocess import CompletedProcess
 import sys
 
 import pytest
@@ -15,6 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
     ("version", "expected"),
     [
         ("3.14.0", (3, 14)),
+        ("3.11.9", (3, 11)),
         ("3.14.99", (3, 14)),
         ("3.14", (3, 14)),
         ("3", None),
@@ -26,6 +28,44 @@ def test_parse_python_series(
     expected: tuple[int, int] | None,
 ) -> None:
     assert launch_app.parse_python_series(version) == expected
+
+
+@pytest.mark.parametrize(
+    "series",
+    [(3, 11), (3, 12), (3, 13), (3, 14)],
+)
+def test_supported_python_range_accepts_3_11_through_3_14(
+    series: tuple[int, int],
+) -> None:
+    assert launch_app.is_supported_python_series(series) is True
+
+
+@pytest.mark.parametrize("series", [(2, 7), (3, 10), (3, 15), (4, 0)])
+def test_supported_python_range_rejects_versions_outside_bounds(
+    series: tuple[int, int],
+) -> None:
+    assert launch_app.is_supported_python_series(series) is False
+
+
+@pytest.mark.parametrize("version_info", [(3, 11, 0), (3, 14, 99)])
+def test_host_python_accepts_supported_boundary_versions(
+    monkeypatch: pytest.MonkeyPatch,
+    version_info: tuple[int, int, int],
+) -> None:
+    monkeypatch.setattr(launch_app.sys, "version_info", version_info)
+
+    launch_app._validate_host_python("3.14.3")
+
+
+@pytest.mark.parametrize("version_info", [(3, 10, 20), (3, 15, 0)])
+def test_host_python_rejects_versions_outside_supported_range(
+    monkeypatch: pytest.MonkeyPatch,
+    version_info: tuple[int, int, int],
+) -> None:
+    monkeypatch.setattr(launch_app.sys, "version_info", version_info)
+
+    with pytest.raises(launch_app.LaunchError, match="3.11.x 至 3.14.x"):
+        launch_app._validate_host_python("3.14.3")
 
 
 def test_required_file_check_explains_that_zip_must_be_extracted(
@@ -134,7 +174,6 @@ def test_existing_invalid_venv_is_not_deleted(tmp_path: Path) -> None:
     with pytest.raises(launch_app.LaunchError, match="请删除项目中的 .venv"):
         launch_app.prepare_environment(
             tmp_path,
-            (3, 14),
             log=StringIO(),
             environment={},
         )
@@ -166,7 +205,6 @@ def test_fresh_environment_creates_venv_and_installs_dependencies(
 
     selected_python = launch_app.prepare_environment(
         tmp_path,
-        (3, 14),
         log=StringIO(),
         environment={"PIP_INDEX_URL": launch_app.DEFAULT_PIP_INDEX_URL},
     )
@@ -219,13 +257,65 @@ def test_dependency_marker_reuses_existing_environment(
 
     selected_python = launch_app.prepare_environment(
         tmp_path,
-        (3, 14),
         log=StringIO(),
         environment={},
     )
 
     assert selected_python == python_path
     assert calls == ["检查现有运行环境"]
+
+
+@pytest.mark.parametrize("venv_series", [(3, 11), (3, 14)])
+def test_existing_venv_accepts_supported_boundary_versions(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    venv_series: tuple[int, int],
+) -> None:
+    python_path = tmp_path / ".venv" / "bin" / "python"
+    python_path.parent.mkdir(parents=True)
+    python_path.write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        launch_app.subprocess,
+        "run",
+        lambda *args, **kwargs: CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=f"{venv_series[0]}.{venv_series[1]}\n",
+        ),
+    )
+
+    launch_app._validate_venv_python(
+        python_path,
+        project_root=tmp_path,
+        environment={},
+    )
+
+
+@pytest.mark.parametrize("venv_series", [(3, 10), (3, 15)])
+def test_existing_venv_rejects_versions_outside_supported_range(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    venv_series: tuple[int, int],
+) -> None:
+    python_path = tmp_path / ".venv" / "bin" / "python"
+    python_path.parent.mkdir(parents=True)
+    python_path.write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        launch_app.subprocess,
+        "run",
+        lambda *args, **kwargs: CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=f"{venv_series[0]}.{venv_series[1]}\n",
+        ),
+    )
+
+    with pytest.raises(launch_app.LaunchError, match="3.11.x 至 3.14.x"):
+        launch_app._validate_venv_python(
+            python_path,
+            project_root=tmp_path,
+            environment={},
+        )
 
 
 def test_failed_dependency_install_does_not_write_completion_marker(
@@ -431,8 +521,9 @@ def test_launch_scripts_have_expected_entrypoints_and_permissions() -> None:
     mac_command = PROJECT_ROOT / "start_mac.command"
     windows_script = PROJECT_ROOT / "start_windows.bat"
 
-    assert mac_script.stat().st_mode & stat.S_IXUSR
-    assert mac_command.stat().st_mode & stat.S_IXUSR
+    if sys.platform != "win32":
+        assert mac_script.stat().st_mode & stat.S_IXUSR
+        assert mac_command.stat().st_mode & stat.S_IXUSR
     assert '"$SCRIPT_DIR/scripts/launch_app.py"' in mac_script.read_text(
         encoding="utf-8"
     )
@@ -440,3 +531,7 @@ def test_launch_scripts_have_expected_entrypoints_and_permissions() -> None:
     windows_source = windows_script.read_text(encoding="utf-8")
     assert "PYTHON_MANAGER_AUTOMATIC_INSTALL=false" in windows_source
     assert '"%~dp0scripts\\launch_app.py"' in windows_source
+    assert "python3.14 python3.13 python3.12 python3.11 python3" in (
+        mac_script.read_text(encoding="utf-8")
+    )
+    assert "for %%V in (3.14 3.13 3.12 3.11)" in windows_source

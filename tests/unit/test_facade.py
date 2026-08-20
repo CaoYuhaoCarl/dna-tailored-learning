@@ -249,7 +249,7 @@ def test_get_app_status_reports_ready_without_creating_model(
         "runtime_ready": True,
         "model_ready": True,
         "python_version": "3.14.3",
-        "expected_python_version": "3.14.3",
+        "recommended_python_version": "3.14.3",
         "model_provider": "deepseek",
         "missing_files": [],
         "runtime_errors": [],
@@ -258,8 +258,11 @@ def test_get_app_status_reports_ready_without_creating_model(
     }
 
 
-@pytest.mark.parametrize("python_version", ["3.14.0", "3.14.3", "3.14.99"])
-def test_get_app_status_accepts_any_python_3_14_patch(
+@pytest.mark.parametrize(
+    "python_version",
+    ["3.11.0", "3.12.9", "3.13.7", "3.14.99"],
+)
+def test_get_app_status_accepts_supported_python_range(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     python_version: str,
@@ -291,8 +294,8 @@ def test_get_app_status_accepts_any_python_3_14_patch(
     assert status["errors"] == []
 
 
-@pytest.mark.parametrize("python_version", ["3.13.9", "3.15.0", "unknown"])
-def test_get_app_status_rejects_other_or_invalid_python_versions(
+@pytest.mark.parametrize("python_version", ["3.10.20", "3.15.0", "unknown"])
+def test_get_app_status_rejects_unsupported_or_invalid_python_versions(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     python_version: str,
@@ -321,10 +324,10 @@ def test_get_app_status_rejects_other_or_invalid_python_versions(
     assert status["ready"] is False
     assert status["runtime_ready"] is False
     assert status["model_ready"] is True
-    assert any("Python 3.14.x" in error for error in status["errors"])
+    assert any("Python 3.11.x 至 3.14.x" in error for error in status["errors"])
 
 
-def test_get_app_status_rejects_invalid_verified_python_version(
+def test_get_app_status_rejects_invalid_recommended_python_version(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -357,7 +360,7 @@ def test_get_app_status_explains_missing_configuration_and_files(
 ) -> None:
     (tmp_path / ".python-version").write_text("3.14.3\n", encoding="utf-8")
     monkeypatch.setattr(facade_module, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(facade_module.platform, "python_version", lambda: "3.13.0")
+    monkeypatch.setattr(facade_module.platform, "python_version", lambda: "3.10.0")
 
     def reject_configuration() -> str:
         raise ModelConfigurationError("缺少测试 API Key。")
@@ -379,7 +382,10 @@ def test_get_app_status_explains_missing_configuration_and_files(
     assert "课程运行所需文件不完整。" in status["errors"]
     assert "课程运行所需文件不完整。" in status["runtime_errors"]
     assert "student/prompt.md" in status["missing_files"]
-    assert any("课程要求 Python 3.14.x" in error for error in status["errors"])
+    assert any(
+        "课程支持 Python 3.11.x 至 3.14.x" in error
+        for error in status["errors"]
+    )
 
 
 def _configure_lesson_artifacts(

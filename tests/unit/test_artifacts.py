@@ -70,19 +70,37 @@ def test_read_markdown_reports_non_utf8_file(tmp_path: Path) -> None:
         read_markdown(prompt_path)
 
 
-def test_default_skill_uses_standard_metadata_and_steps() -> None:
+def test_default_skills_use_standard_metadata_and_steps() -> None:
     skills = discover_skills(SKILLS_PATH)
 
-    assert [skill.name for skill in skills] == ["sorting-out-mistakes"]
-    assert "整理错题" in skills[0].description
-    assert "原题" in skills[0].description
-    artifact = read_skill(skills[0].path)
-    assert "Step 1" in artifact.instructions
-    assert "student/mistakes/inbox/" in artifact.instructions
-    assert "student/mistakes/records/" in artifact.instructions
-    assert "save_mistake" in artifact.instructions
-    assert "schema_version" in artifact.instructions
-    assert "next_review_at" in artifact.instructions
+    assert [skill.name for skill in skills] == [
+        "english-quest",
+        "sorting-out-mistakes",
+    ]
+    skills_by_name = {skill.name: skill for skill in skills}
+
+    quest = read_skill(skills_by_name["english-quest"].path)
+    assert "闯关" in quest.metadata.description
+    assert "普通英语问答" in quest.metadata.description
+    assert "五关" in quest.instructions
+    assert "每轮只能有一个" in quest.instructions
+    assert "任务报告" in quest.instructions
+    assert "不要声称游戏结果已经保存" in quest.instructions
+    assert "scripts/quest_state.py" in quest.instructions
+    assert "assets/detective-board.svg" in quest.instructions
+    quest_root = skills_by_name["english-quest"].path.parent
+    assert (quest_root / "scripts" / "quest_state.py").is_file()
+    assert (quest_root / "assets" / "detective-board.svg").is_file()
+
+    mistakes = read_skill(skills_by_name["sorting-out-mistakes"].path)
+    assert "整理错题" in mistakes.metadata.description
+    assert "原题" in mistakes.metadata.description
+    assert "Step 1" in mistakes.instructions
+    assert "student/mistakes/inbox/" in mistakes.instructions
+    assert "student/mistakes/records/" in mistakes.instructions
+    assert "save_mistake" in mistakes.instructions
+    assert "schema_version" in mistakes.instructions
+    assert "next_review_at" in mistakes.instructions
 
 
 def test_read_skill_requires_frontmatter(tmp_path: Path) -> None:

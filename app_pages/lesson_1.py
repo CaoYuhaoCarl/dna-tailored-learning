@@ -25,6 +25,12 @@ from src.progress import (
     load_progress,
     save_progress,
 )
+from src.skill_pages import (
+    ENGLISH_QUEST_NAME,
+    ENGLISH_QUEST_PAGE,
+    new_english_quest_session,
+    result_loaded_skill,
+)
 
 
 STAGES = ("V0", "V1", "V2")
@@ -81,7 +87,7 @@ TRAINING_COPY = {
     },
 }
 TOOL_DESCRIPTIONS = {
-    "load_skill": "读取了整理错题的方法",
+    "load_skill": "读取了任务需要的 Skill",
     "load_mistake_file": "读取了等待整理的错题",
     "save_mistake": "保存了正式错题记录",
 }
@@ -365,6 +371,10 @@ with st.sidebar:
             for call in last_result["tool_calls"]:
                 name = call.get("name", "unknown")
                 description = TOOL_DESCRIPTIONS.get(name, "使用了一项工具")
+                if name == "load_skill":
+                    skill_name = call.get("args", {}).get("skill_name")
+                    if skill_name:
+                        description = f"读取了 Skill：`{skill_name}`"
                 st.markdown(f"- {description}")
             with st.expander("查看开发者信息", icon=":material/code:"):
                 st.caption("这里记录了工具名称和参数，现在看不懂也没关系。")
@@ -470,4 +480,19 @@ if raw_submission is not None:
             st.write(result["text"])
             st.session_state.lesson1_last_attempts[stage] = None
             _record_success(stage, submission.display_text, result)
+            if stage == "V2" and result_loaded_skill(
+                result,
+                ENGLISH_QUEST_NAME,
+            ):
+                st.session_state.english_quest_session = (
+                    new_english_quest_session(
+                        history=st.session_state.lesson1_histories[stage],
+                        agent_stage="V2",
+                        return_page="app_pages/lesson_1.py",
+                        return_label="返回第一课",
+                        source_history_key="lesson1_histories",
+                        source_stage=stage,
+                    )
+                )
+                st.switch_page(ENGLISH_QUEST_PAGE)
     st.rerun()
