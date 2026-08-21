@@ -694,6 +694,10 @@ def test_attachment_write_authorization_rejects_non_requests(message: str) -> No
 @pytest.mark.parametrize(
     "message",
     [
+        "错题1 类型：语法填空 原题：I ____ (read) this book three times. "
+        "我的答案：am reading",
+        "题目是 She ____ (go) to the library yesterday. "
+        "学生原答案是 has gone",
         "请整理这道错题：I ____ (read) this book three times。",
         "请把这道错题整理一下：我的答案是 am reading。",
         "继续整理 student/mistakes/inbox/english.md",
@@ -713,7 +717,7 @@ def test_attachment_write_authorization_rejects_non_requests(message: str) -> No
         "请整理这道错题：取消括号后化简。",
     ],
 )
-def test_mistake_write_authorization_accepts_current_explicit_request(
+def test_mistake_write_authorization_accepts_explicit_or_structured_submission(
     message: str,
 ) -> None:
     assert mistake_write_requested(message)
@@ -723,6 +727,7 @@ def test_mistake_write_authorization_accepts_current_explicit_request(
     "message",
     [
         "继续解释",
+        "只解释这些字段：原题：测试题；我的答案：测试答案",
         "重新整理错题吗？",
         "继续整理安全吗？",
         "整理错题，怎么做",

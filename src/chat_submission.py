@@ -106,6 +106,12 @@ _CONTINUE_WRITE_PATTERN = re.compile(
     rf"^(?:{_WRITE_REQUEST_PREFIX_PATTERN})?继续"
     rf"{_WRITE_VERB_PATTERN}(?:一下)?{_WRITE_COMMAND_BOUNDARY}"
 )
+_STRUCTURED_ORIGINAL_QUESTION_PATTERN = re.compile(
+    r"(?:原题|题目)\s*(?:[：:]|是)\s*\S"
+)
+_STRUCTURED_STUDENT_ANSWER_PATTERN = re.compile(
+    r"(?:我的答案|学生(?:原)?答案|我的作答)\s*(?:[：:]|是)\s*\S"
+)
 _COMPOSITE_WRITE_PATTERN = re.compile(
     rf"^(?:{_WRITE_REQUEST_PREFIX_PATTERN})?(?:先)?"
     rf"{_WRITE_VERB_PATTERN}(?:一下)?(?:{_QUOTED_WRITE_TARGET_PATTERN})?"
@@ -496,7 +502,7 @@ def attachment_write_requested(message: str) -> bool:
 
 
 def mistake_write_requested(message: str) -> bool:
-    """只依据当前轮学生键入的肯定式请求决定是否开放错题写工具。"""
+    """依据当前轮肯定式请求或结构化错题提交决定是否开放写工具。"""
 
     compact = "".join(message.split())
     without_end_punctuation = compact.rstrip("。！!？?")
@@ -531,7 +537,13 @@ def mistake_write_requested(message: str) -> bool:
             path = remainder.strip().strip("\"'“”‘’")
             return bool(path and path.casefold().endswith(".md"))
         return False
-    return False
+    normalized_message = _compact_encoded_text(clean_message)
+    if _WRITE_REVOCATION_PATTERN.search(normalized_message):
+        return False
+    return bool(
+        _STRUCTURED_ORIGINAL_QUESTION_PATTERN.search(clean_message)
+        and _STRUCTURED_STUDENT_ANSWER_PATTERN.search(clean_message)
+    )
 
 
 def sanitize_attachment_output(
