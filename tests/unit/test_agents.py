@@ -1701,6 +1701,11 @@ def test_invoke_v2_rejects_empty_message() -> None:
     [
         ("", False),
         ("请解释附件中的概念", False),
+        (
+            "错题1 类型：语法填空 原题：I ____ (read) this book three times. "
+            "我的答案：am reading",
+            True,
+        ),
         ("麻烦别保存这个附件", False),
         ("请介绍保存附件的功能", False),
         ("我要保存附件吗？", False),
@@ -1720,7 +1725,7 @@ def test_invoke_v2_rejects_empty_message() -> None:
         ("请整理这道错题：取消括号后化简。", True),
     ],
 )
-def test_v2_v3_bind_save_mistake_only_for_explicit_attachment_request(
+def test_v2_v3_bind_save_mistake_only_for_authorized_current_message(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     function_name: str,
