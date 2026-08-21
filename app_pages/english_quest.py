@@ -43,7 +43,15 @@ def _derive_quest_state(history: list[dict]) -> tuple[dict, str | None]:
         namespace = runpy.run_path(str(QUEST_STATE_SCRIPT))
         derive = namespace["derive_quest_state"]
         state = derive(history)
-        required_keys = {"level", "hearts", "xp", "complete"}
+        required_keys = {
+            "level",
+            "hearts",
+            "xp",
+            "complete",
+            "has_status_line",
+            "template_complete",
+            "deviations",
+        }
         if not isinstance(state, dict) or not required_keys <= state.keys():
             raise ValueError("脚本没有返回完整的游戏状态。")
     except Exception as exc:
@@ -52,6 +60,9 @@ def _derive_quest_state(history: list[dict]) -> tuple[dict, str | None]:
             "hearts": 3,
             "xp": 0,
             "complete": False,
+            "has_status_line": False,
+            "template_complete": False,
+            "deviations": ["状态脚本执行失败"],
         }, str(exc)
     return state, None
 
@@ -162,6 +173,14 @@ with st.sidebar:
 
     if state_error:
         st.error(f"Skill 状态脚本读取失败：{state_error}")
+
+    if history and not quest_state["template_complete"]:
+        with st.expander("Skill 输出模板漂移", expanded=False, icon=":material/warning:"):
+            st.warning(
+                "最新一局回复未通过 SKILL.md 的 4 段模板校验（这只是软提示，不影响答题和判分）："
+            )
+            for deviation in quest_state["deviations"]:
+                st.markdown(f"- {deviation}")
 
     last_result = st.session_state.english_quest_last_result
     if last_result and result_loaded_skill(
