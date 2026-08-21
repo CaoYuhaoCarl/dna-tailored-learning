@@ -17,3 +17,4 @@ student/**/artifacts/*.md
 /student/OWNER.md
 student/mistakes/records/
 student/reports/
+build_student_package.py
