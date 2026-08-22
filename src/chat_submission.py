@@ -112,18 +112,46 @@ _STRUCTURED_ORIGINAL_QUESTION_PATTERN = re.compile(
 _STRUCTURED_STUDENT_ANSWER_PATTERN = re.compile(
     r"(?:我的答案|学生(?:原)?答案|我的作答)\s*(?:[：:]|是)\s*\S"
 )
+_STRUCTURED_MISTAKE_SUBMISSION_START_PATTERN = re.compile(
+    r"^(?:"
+    r"错题(?:\d+)?(?=$|[：:]|类型|题型|学科|科目|原题)"
+    r"|(?:以下|下面)是我的错题[：:]"
+    r"|(?:题目|原题)(?:是|[：:])"
+    r"|这是(?:一道|一条|我的)?(?:错题|题)"
+    r"|这道题"
+    r"|(?:学科|科目|题型|类型)[：:]"
+    r")"
+)
+_STRUCTURED_MISTAKE_META_DISCUSSION_PATTERN = re.compile(
+    r"(?:这是)?(?:文档|README|说明)(?:格式)?示例"
+    r"|(?:这个|这种|上述|以上)?格式(?:对|正确)吗"
+    r"|(?:这个|这种)?写法(?:对|正确)吗"
+    r"|请问(?:这个|这种)?(?:格式|写法)(?:是否)?(?:对|正确)"
+)
 _COMPOSITE_WRITE_PATTERN = re.compile(
     rf"^(?:{_WRITE_REQUEST_PREFIX_PATTERN})?(?:先)?"
     rf"{_WRITE_VERB_PATTERN}(?:一下)?(?:{_QUOTED_WRITE_TARGET_PATTERN})?"
     rf"(?:后|并|再|然后)(?:总结)?复盘{_WRITE_REQUEST_TAIL_PATTERN}$"
 )
+_WRITE_REVOCATION_ACTION_PATTERN = (
+    r"(?:保存|整理|动|操作|写入|入库|归档|收集|执行|处理|存|"
+    r"记(?:到|入)错题本)"
+)
+_WRITE_REVOCATION_INTERPOSER_PATTERN = (
+    r"(?:(?:帮我|替我|给我)|(?:把|将)(?:它|这(?:些|个|道)?(?:错题|题)?))?"
+)
 _WRITE_REVOCATION_PATTERN = re.compile(
-    r"(?:^|[，,。！!；;])(?:但是|但|不过|然而|请|我)?(?:"
-    r"(?:先|暂时)?(?:别|勿|莫)(?:保存|整理|动|操作|写入|入库|归档|收集|执行|处理)"
-    r"|(?:不用|无需|无须|毋须|不必)"
-    r"(?:了|(?:再)?(?:保存|整理|写入|入库|操作|执行))?"
+    r"(?:^|[，,。！!；;])(?:我决定|决定|但是|但|不过|然而|请|我)?(?:"
+    rf"(?:先|暂时)?(?:别|勿|莫)(?:再)?"
+    rf"{_WRITE_REVOCATION_INTERPOSER_PATTERN}(?:再)?"
+    rf"{_WRITE_REVOCATION_ACTION_PATTERN}"
+    r"|(?:不用|无需|无须|毋须|不必|不需要)"
+    rf"(?:(?:再)?{_WRITE_REVOCATION_INTERPOSER_PATTERN}(?:再)?"
+    rf"{_WRITE_REVOCATION_ACTION_PATTERN})?(?:了)?"
     r"(?=$|[，,。！!；;])"
-    r"|(?:先|暂时)?不(?:要|想)?(?:再)?(?:保存|整理|写入|入库|归档|收集|操作|执行|处理)"
+    rf"|(?:先|暂时)?不(?:要|想)?(?:再)?"
+    rf"{_WRITE_REVOCATION_INTERPOSER_PATTERN}(?:再)?"
+    rf"{_WRITE_REVOCATION_ACTION_PATTERN}"
     r"|(?:只|仅)(?:需|需要|要|想|做)?(?:解释|分析|讲解|翻译)"
     r"|(?:只是|仅仅)(?:问问|询问|了解|想知道)"
     r"|(?:还是)?算了(?=$|[，,。！!；;])"
@@ -133,9 +161,106 @@ _WRITE_REVOCATION_PATTERN = re.compile(
     r"|(?:稍后再说|暂缓)(?=$|[，,。！!；;])"
     r"|(?:这)?(?:并非|不是)(?:要)?(?:保存|整理|写入|归档)"
     r"(?:命令|请求|操作|意图|意思)?(?=$|[，,。！!；;])"
-    r"|(?:停止|撤回|撤销|取消)(?:保存|整理|操作|执行|这次|本次)?"
+    r"|(?:停止|撤回|撤销|取消)"
+    r"(?:(?:刚才|先前|之前)的|(?:这|本)次(?:的)?)?"
+    r"(?:保存|整理|操作|执行)?(?:请求|命令|操作)?"
     r"(?=$|[，,。！!；;])"
     r")"
+)
+_MISTAKE_WRITE_CONFIRMATION_PATTERN = re.compile(
+    rf"^(?:(?:好(?:的)?|可以|行|没问题|那就|就|确认)[，,。！!]*)?"
+    rf"(?:{_WRITE_REQUEST_PREFIX_PATTERN})?"
+    rf"(?:继续|重新|确认|直接|全部|都|现在|就)?{_WRITE_VERB_PATTERN}"
+    r"(?:一下|下来|起来|全部|都|吧|了|即可|就行)*[。！!]*$"
+)
+_WRITE_ACKNOWLEDGEMENT_PATTERN = (
+    r"(?:(?:好(?:的)?|行|没问题|那就|就|确认)[，,。！!]*)?"
+)
+_MISTAKE_COUNT_PATTERN = r"(?:[一二两三四五六七八九十百\d]+|几|每一?)"
+_MISTAKE_TARGET_TEXT_PATTERN = (
+    r"(?:"
+    rf"(?:这|那){_MISTAKE_COUNT_PATTERN}(?:道|个|题)?"
+    r"|"
+    r"(?:(?:上述|以上|以下|上面|前面|刚才|本局)(?:的)?)?"
+    r"(?:(?:这|那|这些|那些|全部|所有|我的|整理好|识别(?:出|到)?)(?:的)?)?"
+    rf"(?:{_MISTAKE_COUNT_PATTERN}"
+    r"(?:(?:道|个)(?=(?:错题|(?:答|做)错的|题))|(?=题)))?"
+    r"(?:错题|(?:答|做)错的"
+    rf"(?:{_MISTAKE_COUNT_PATTERN}(?:道|个)?)?"
+    r"(?:题|题目)|题目|题)"
+    r"|它们|上述内容|以上内容|整理好的内容"
+    r")"
+)
+_MISTAKE_TOOL_CALL_PREFIX_PATTERN = re.compile(
+    r"^(?:请)?(?:实际)?调用`?save_mistake`?(?:工具)?(?:来)?",
+    flags=re.IGNORECASE,
+)
+_MISTAKE_WRITE_TAIL_PATTERN = (
+    r"(?:一下|下来|起来|吧|了|即可|就行)*"
+    r"(?:好吗|可以吗|行吗)?[。！!？?]*"
+)
+_MISTAKE_MARKDOWN_PATH_PATTERN = (
+    r"(?:"
+    r"(?:[A-Za-z]:)?[\\/](?:[^\\/\r\n]+[\\/])*"
+    r"(?:student[\\/])?mistakes[\\/]inbox[\\/]"
+    r"|(?:student[\\/])?mistakes[\\/]inbox[\\/]"
+    r"|inbox[\\/]"
+    r")"
+    r"(?:[^\\/\r\n]+[\\/])*[^\\/\r\n]+\.md"
+)
+_MISTAKE_WRITE_BEFORE_TARGET_PATTERN = re.compile(
+    rf"^{_WRITE_ACKNOWLEDGEMENT_PATTERN}"
+    rf"(?:{_WRITE_REQUEST_PREFIX_PATTERN})?(?:继续|重新)?"
+    rf"{_WRITE_VERB_PATTERN}(?:并{_WRITE_VERB_PATTERN})?(?:一下)?"
+    rf"{_MISTAKE_TARGET_TEXT_PATTERN}(?:全部|都|分别)?"
+    rf"{_MISTAKE_WRITE_TAIL_PATTERN}$"
+)
+_MISTAKE_TARGET_BEFORE_WRITE_PATTERN = re.compile(
+    rf"^{_WRITE_ACKNOWLEDGEMENT_PATTERN}"
+    rf"(?:{_WRITE_REQUEST_PREFIX_PATTERN})?(?:继续|重新)?(?:把|将|为)"
+    rf"{_MISTAKE_TARGET_TEXT_PATTERN}(?:全部|都|分别)?"
+    rf"(?:{_WRITE_VERB_PATTERN}(?:并{_WRITE_VERB_PATTERN})?(?:一下)?"
+    r"(?:(?:进|到|至)(?:我的)?错题本)?"
+    r"|存(?:(?:进|到)(?:我的)?错题本)?"
+    r"|记(?:到|入)(?:我的)?错题本)"
+    rf"{_MISTAKE_WRITE_TAIL_PATTERN}$"
+)
+_MISTAKE_TARGET_REQUEST_WRITE_PATTERN = re.compile(
+    rf"^{_MISTAKE_TARGET_TEXT_PATTERN}(?:请)?(?:帮我|替我|给我)"
+    rf"(?:继续|重新)?{_WRITE_VERB_PATTERN}(?:一下)?"
+    rf"{_MISTAKE_WRITE_TAIL_PATTERN}$"
+)
+_MISTAKE_TARGET_DIRECT_WRITE_PATTERN = re.compile(
+    rf"^{_WRITE_ACKNOWLEDGEMENT_PATTERN}(?:就)?"
+    rf"{_MISTAKE_TARGET_TEXT_PATTERN}[，,]?"
+    rf"(?:请)?(?:帮我|替我|给我)?(?:继续|重新)?"
+    rf"{_WRITE_VERB_PATTERN}{_MISTAKE_WRITE_TAIL_PATTERN}$"
+)
+_MISTAKE_MARKDOWN_WRITE_PATTERN = re.compile(
+    rf"^{_WRITE_ACKNOWLEDGEMENT_PATTERN}"
+    rf"(?:{_WRITE_REQUEST_PREFIX_PATTERN})?(?:继续|重新)?"
+    rf"{_WRITE_VERB_PATTERN}(?:并{_WRITE_VERB_PATTERN})?(?:一下)?"
+    rf"[“\"'‘]?{_MISTAKE_MARKDOWN_PATH_PATTERN}[”\"'’]?"
+    rf"{_MISTAKE_WRITE_TAIL_PATTERN}$",
+    flags=re.IGNORECASE,
+)
+_MISTAKE_FILE_WRITE_PATTERN = re.compile(
+    rf"^{_WRITE_ACKNOWLEDGEMENT_PATTERN}"
+    rf"(?:{_WRITE_REQUEST_PREFIX_PATTERN})?(?:继续|重新)?"
+    rf"{_WRITE_VERB_PATTERN}(?:并{_WRITE_VERB_PATTERN})?(?:一下)?"
+    r"(?:这个|这份|当前)?文件(?:里|中)(?:的)?(?:全部|所有)?错题[：:]"
+    rf"[“\"'‘]?{_MISTAKE_MARKDOWN_PATH_PATTERN}[”\"'’]?"
+    rf"{_MISTAKE_WRITE_TAIL_PATTERN}$",
+    flags=re.IGNORECASE,
+)
+_MISTAKE_READ_AND_WRITE_FILE_PATTERN = re.compile(
+    rf"^{_WRITE_ACKNOWLEDGEMENT_PATTERN}"
+    rf"(?:{_WRITE_REQUEST_PREFIX_PATTERN})?读取(?:一下)?"
+    rf"[“\"'‘]?{_MISTAKE_MARKDOWN_PATH_PATTERN}[”\"'’]?"
+    rf"(?:并|然后|再){_WRITE_VERB_PATTERN}(?:一下)?"
+    r"(?:里面|其中|文件(?:里|中))(?:的)?(?:全部|所有)?错题"
+    rf"{_MISTAKE_WRITE_TAIL_PATTERN}$",
+    flags=re.IGNORECASE,
 )
 _IMAGE_DATA_URL_PATTERN = re.compile(
     r"data:image/(?:jpeg|jpg|png)(?:;[^,\r\n]*)?;\s*base64\s*,\s*"
@@ -505,16 +630,29 @@ def mistake_write_requested(message: str) -> bool:
     """依据当前轮肯定式请求或结构化错题提交决定是否开放写工具。"""
 
     compact = "".join(message.split())
+    clean_message = message.strip()
+    normalized_message = _compact_encoded_text(clean_message)
+    intent_message = _MISTAKE_TOOL_CALL_PREFIX_PATTERN.sub(
+        "",
+        normalized_message,
+        count=1,
+    )
     without_end_punctuation = compact.rstrip("。！!？?")
     if compact.startswith(_MISTAKE_AMBIGUOUS_QUESTION_PREFIXES) and (
         compact.endswith(("？", "?")) or without_end_punctuation.endswith("吗")
     ):
         return False
+    revocation_text = re.sub(
+        r"[：:]|(?:但是|但|不过|然而|然后|其实|可是)",
+        "，",
+        normalized_message,
+    )
+    if _WRITE_REVOCATION_PATTERN.search(revocation_text):
+        return False
     if attachment_write_requested(message) or _COMPOSITE_WRITE_PATTERN.fullmatch(
         compact
     ):
         return True
-    clean_message = message.strip()
     matches = (
         _GENERAL_WRITE_BEFORE_TARGET_PATTERN.match(clean_message),
         _GENERAL_TARGET_BEFORE_WRITE_PATTERN.match(clean_message),
@@ -535,14 +673,35 @@ def mistake_write_requested(message: str) -> bool:
             )
         if index == 2 and remainder[0].isspace():
             path = remainder.strip().strip("\"'“”‘’")
-            return bool(path and path.casefold().endswith(".md"))
+            return bool(
+                path
+                and re.fullmatch(
+                    _MISTAKE_MARKDOWN_PATH_PATTERN,
+                    path,
+                    flags=re.IGNORECASE,
+                )
+            )
         return False
-    normalized_message = _compact_encoded_text(clean_message)
-    if _WRITE_REVOCATION_PATTERN.search(normalized_message):
-        return False
-    return bool(
-        _STRUCTURED_ORIGINAL_QUESTION_PATTERN.search(clean_message)
+    if (
+        _STRUCTURED_MISTAKE_SUBMISSION_START_PATTERN.search(compact)
+        and _STRUCTURED_ORIGINAL_QUESTION_PATTERN.search(clean_message)
         and _STRUCTURED_STUDENT_ANSWER_PATTERN.search(clean_message)
+        and _STRUCTURED_MISTAKE_META_DISCUSSION_PATTERN.search(compact) is None
+    ):
+        return True
+    if _MISTAKE_WRITE_CONFIRMATION_PATTERN.fullmatch(intent_message):
+        return True
+    return any(
+        pattern.fullmatch(intent_message)
+        for pattern in (
+            _MISTAKE_WRITE_BEFORE_TARGET_PATTERN,
+            _MISTAKE_TARGET_BEFORE_WRITE_PATTERN,
+            _MISTAKE_TARGET_REQUEST_WRITE_PATTERN,
+            _MISTAKE_TARGET_DIRECT_WRITE_PATTERN,
+            _MISTAKE_MARKDOWN_WRITE_PATTERN,
+            _MISTAKE_FILE_WRITE_PATTERN,
+            _MISTAKE_READ_AND_WRITE_FILE_PATTERN,
+        )
     )
 
 

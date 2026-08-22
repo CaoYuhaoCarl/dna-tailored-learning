@@ -651,7 +651,10 @@ def _organize_mistakes(
     state: WorkflowState,
     runtime: Runtime[WorkflowRuntimeContext],
 ) -> dict:
-    organizer_kwargs = {"history": state["messages"]}
+    organizer_kwargs = {
+        "history": state["messages"],
+        "trusted_write_authorized": True,
+    }
     if runtime.context.attachment is not None:
         organizer_kwargs["attachment"] = runtime.context.attachment
     if runtime.context.personalization is not None:

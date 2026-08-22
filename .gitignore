@@ -18,3 +18,5 @@ student/**/artifacts/*.md
 student/mistakes/records/
 student/reports/
 build_student_package.py
+start_windows.bat
+start_mac.sh
