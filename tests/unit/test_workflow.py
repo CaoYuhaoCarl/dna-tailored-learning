@@ -984,6 +984,7 @@ def test_v4_attachment_only_does_not_inherit_organizing_write_authority(
         history,
         attachment=None,
         personalization=None,
+        **_kwargs,
     ):
         organizer_calls.append((message, attachment))
         return new_agent_result("V3", text="请继续提供要整理的材料。")
@@ -1057,6 +1058,7 @@ def test_v4_explicit_organize_request_passes_same_turn_attachment(
         history,
         attachment=None,
         personalization=None,
+        **_kwargs,
     ):
         organizer_attachments.append(attachment)
         return new_agent_result("V3", text="已读取图片，等待补充错题信息。")
@@ -1126,7 +1128,13 @@ def test_v4_only_explicit_organize_request_uses_write_agent(
         lambda message, **_kwargs: new_agent_result("V4", text="这是概念解释。"),
     )
 
-    def fake_organizer(message: str, *, history, personalization=None):
+    def fake_organizer(
+        message: str,
+        *,
+        history,
+        personalization=None,
+        **_kwargs,
+    ):
         calls.append(message)
         return new_agent_result(
             "V3",
@@ -1175,6 +1183,46 @@ def test_v4_only_explicit_organize_request_uses_write_agent(
     assert "不确定" in review_process_question["text"]
     assert calls == ["请帮我整理并保存这道错题"]
     assert saved["tool_calls"][0]["name"] == "save_mistake"
+
+
+def test_v4_continuing_organize_keeps_server_write_authorization(
+    isolated_graph,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, bool]] = []
+
+    def fake_organizer(
+        message: str,
+        *,
+        history,
+        trusted_write_authorized: bool,
+        personalization=None,
+    ):
+        calls.append((message, trusted_write_authorized))
+        return new_agent_result("V3", text="请继续补充学生原答案。")
+
+    monkeypatch.setattr(
+        workflow_module,
+        "_classify_turn",
+        Mock(side_effect=AssertionError("active organize task must not reclassify")),
+    )
+    monkeypatch.setattr(workflow_module, "invoke_v3", fake_organizer)
+
+    started = workflow_module.chat_v4(
+        "请整理并保存这道错题：原题是 2 + 2 = ?",
+        "thread-organize-follow-up",
+    )
+    continued = workflow_module.chat_v4(
+        "我的答案是 5",
+        "thread-organize-follow-up",
+    )
+
+    assert started["error"] is None
+    assert continued["error"] is None
+    assert calls == [
+        ("请整理并保存这道错题：原题是 2 + 2 = ?", True),
+        ("我的答案是 5", True),
+    ]
 
 
 def test_v4_review_waits_for_unsaved_choice_then_writes_grounded_report(
@@ -1274,7 +1322,7 @@ def test_v4_partial_save_stops_queued_review(
     monkeypatch.setattr(
         workflow_module,
         "invoke_v3",
-        lambda message, *, history, personalization=None: new_agent_result(
+        lambda message, *, history, personalization=None, **_kwargs: new_agent_result(
             "V3",
             text="第一题保存成功，第二题保存失败。",
             tool_calls=[
@@ -1322,7 +1370,7 @@ def test_v4_explicit_composite_request_saves_then_reviews(
     monkeypatch.setattr(
         workflow_module,
         "invoke_v3",
-        lambda message, *, history, personalization=None: new_agent_result(
+        lambda message, *, history, personalization=None, **_kwargs: new_agent_result(
             "V3",
             text="保存成功：student/mistakes/records/english/mistake-test.md",
             tool_calls=[{"name": "save_mistake", "args": {}}],
