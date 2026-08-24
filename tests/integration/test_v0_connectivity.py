@@ -1,10 +1,18 @@
+from base64 import b64decode
 import os
 
 from dotenv import dotenv_values
 import pytest
 
 from src.facade import invoke
+from src.chat_submission import create_chat_attachment
 import src.model as model_module
+
+
+_TINY_PNG = b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8A"
+    "AQUBAScY42YAAAAASUVORK5CYII="
+)
 
 
 @pytest.mark.integration
@@ -19,7 +27,7 @@ def test_v0_connects_to_selected_model() -> None:
 
 
 @pytest.mark.integration
-def test_deepseek_v4_flash_connects(
+def test_deepseek_v4_flash_vision_accepts_image(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     if os.getenv("RUN_DEEPSEEK_INTEGRATION") != "1":
@@ -40,9 +48,22 @@ def test_deepseek_v4_flash_connects(
     content = None
     try:
         llm = model_module.get_llm()
-        assert model_module.get_model_name(llm) == "deepseek-v4-flash"
-        response = llm.invoke("请只回复：DeepSeek 连接成功")
-        content = response.content
+        assert model_module.get_model_name(llm) == (
+            "deepseek-v4-flash-vision-exp"
+        )
+        attachment = create_chat_attachment(
+            name="integration.png",
+            media_type="image/png",
+            data=_TINY_PNG,
+        )
+        result = invoke(
+            "V0",
+            "请用一句话描述这张图片，并且不要返回图片编码。",
+            attachment=attachment,
+        )
+        content = result["text"]
+        if result["error"]:
+            raise RuntimeError(result["error"])
     except Exception as exc:
         error_type = type(exc).__name__
     else:
@@ -50,10 +71,10 @@ def test_deepseek_v4_flash_connects(
 
     if error_type is not None:
         pytest.fail(
-            "DeepSeek V4 Flash 连通性检查失败，"
+            "DeepSeek V4 Flash Vision 图片连通性检查失败，"
             f"异常类型：{error_type}。",
             pytrace=False,
         )
 
     if not content or (isinstance(content, str) and not content.strip()):
-        pytest.fail("DeepSeek V4 Flash 返回了空内容。", pytrace=False)
+        pytest.fail("DeepSeek V4 Flash Vision 返回了空内容。", pytrace=False)

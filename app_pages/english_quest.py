@@ -7,6 +7,13 @@ import runpy
 import streamlit as st
 
 from src.artifacts import SKILLS_PATH
+from src.chat_submission import (
+    ACCEPTED_FILE_TYPES,
+    MAX_ATTACHMENT_BYTES,
+    ChatSubmission,
+    ChatSubmissionError,
+    parse_chat_submission,
+)
 from src.facade import invoke
 from src.skill_pages import (
     ENGLISH_QUEST_NAME,
@@ -105,25 +112,42 @@ def _reset_quest() -> None:
     _sync_source_history()
 
 
-def _run_turn(message: str) -> None:
+def _run_turn(submission: ChatSubmission) -> None:
     """调用原 V2/V3 Agent，并让完整历史在专属页继续。"""
 
     session = st.session_state.english_quest_session
     history = session["history"]
-    st.session_state.english_quest_last_attempt = message
+    st.session_state.english_quest_last_attempt = submission.display_text
     st.session_state.english_quest_last_error = None
-    result = invoke(
-        session["agent_stage"],
-        message,
-        history=[item.copy() for item in history],
-    )
+    conversation = [item.copy() for item in history]
+    if submission.attachment is None:
+        result = invoke(
+            session["agent_stage"],
+            submission.text,
+            history=conversation,
+        )
+    else:
+        result = invoke(
+            session["agent_stage"],
+            submission.text,
+            history=conversation,
+            attachment=submission.attachment,
+        )
+    if result["error"] and submission.attachment is not None:
+        result = {
+            **result,
+            "error": (
+                f"{result['error']} "
+                "附件未保留，请重新选择附件后发送。"
+            ),
+        }
     st.session_state.english_quest_last_result = result
     if result["error"]:
         st.session_state.english_quest_last_error = result["error"]
         return
     history.extend(
         [
-            {"role": "user", "content": message},
+            {"role": "user", "content": submission.display_text},
             {"role": "assistant", "content": result["text"]},
         ]
     )
@@ -234,7 +258,7 @@ if start_clicked:
     target = knowledge_point.strip() or topic_type
     opening_message = f"我们玩一个{theme}闯关游戏练英语{target}。"
     with st.spinner("正在生成第一条线索…", show_time=True):
-        _run_turn(opening_message)
+        _run_turn(ChatSubmission(text=opening_message))
     st.rerun()
 
 if history:
@@ -279,15 +303,30 @@ if history:
             "输入答案，或说“给我一个提示”",
             key="english_quest_chat",
             max_chars=2_000,
+            max_upload_size=MAX_ATTACHMENT_BYTES // (1024 * 1024),
+            accept_file=True,
+            file_type=list(ACCEPTED_FILE_TYPES),
             submit_mode="disable",
         )
 
     if submitted_message is not None:
-        clean_message = submitted_message.strip()
-        if not clean_message:
-            st.session_state.english_quest_last_attempt = submitted_message
-            st.session_state.english_quest_last_error = "请输入内容后再发送。"
+        try:
+            submission = parse_chat_submission(submitted_message)
+        except ChatSubmissionError as exc:
+            raw_text = (
+                submitted_message
+                if isinstance(submitted_message, str)
+                else getattr(submitted_message, "text", "")
+            )
+            st.session_state.english_quest_last_attempt = (
+                raw_text.strip() or "附件提交"
+            )
+            st.session_state.english_quest_last_error = str(exc)
             st.rerun()
+        with _chat_bubble("user"):
+            st.write(submission.display_text)
+            if submission.attachment and submission.attachment.is_image:
+                st.image(submission.attachment.data)
         with st.spinner("侦探正在核对线索…", show_time=True):
-            _run_turn(clean_message)
+            _run_turn(submission)
         st.rerun()

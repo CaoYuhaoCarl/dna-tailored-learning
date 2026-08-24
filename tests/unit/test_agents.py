@@ -189,6 +189,7 @@ def test_invoke_v0_reads_text_content_blocks(monkeypatch: pytest.MonkeyPatch) ->
 @pytest.mark.parametrize(
     ("provider", "name", "media_type", "data"),
     [
+        ("deepseek", "question.jpg", "image/jpeg", JPEG_BYTES),
         ("moonshot", "question.jpg", "image/jpeg", JPEG_BYTES),
         ("gemini", "diagram.png", "image/png", PNG_BYTES),
     ],
@@ -254,34 +255,6 @@ def test_invoke_v0_redacts_image_data_repeated_by_model(
     assert result["error"] is None
     assert result["text"] == "[图片数据已省略]"
     assert encoded not in result["text"]
-
-
-def test_invoke_v0_rejects_deepseek_image_before_model_invocation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    attachment = create_chat_attachment(
-        name="question.png",
-        media_type="image/png",
-        data=PNG_BYTES,
-    )
-    fake_llm = FakeLlm("不应调用")
-    get_llm = Mock(return_value=fake_llm)
-    monkeypatch.setattr(
-        agents_module,
-        "validate_model_configuration",
-        lambda: "deepseek",
-    )
-    monkeypatch.setattr(agents_module, "get_llm", get_llm)
-
-    result = agents_module.invoke_v0("请分析图片", attachment=attachment)
-
-    assert result["error"] == (
-        "当前 DeepSeek 模型不支持图片。"
-        "请到首页切换为 Kimi 或 Gemini，重新选择图片后发送。"
-    )
-    get_llm.assert_not_called()
-    assert fake_llm.messages == []
-
 
 def test_invoke_v0_rejects_empty_message() -> None:
     result = agents_module.invoke_v0("   ")
@@ -833,6 +806,54 @@ def test_invoke_v2_exposes_metadata_and_loads_full_skill_on_demand(
             "type": "tool_call",
         }
     ]
+
+
+def test_invoke_v2_sends_deepseek_image_as_data_url_content_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    prompt_path = tmp_path / "prompt.md"
+    prompt_path.write_text("一次只问一个问题。", encoding="utf-8")
+    skills_path = tmp_path / "skill"
+    _write_test_skill(skills_path, "用户要求整理错题时使用", "先收集原题。")
+    attachment = create_chat_attachment(
+        name="question.png",
+        media_type="image/png",
+        data=PNG_BYTES,
+    )
+    inputs: list[dict] = []
+    monkeypatch.setattr(
+        agents_module,
+        "validate_model_configuration",
+        lambda: "deepseek",
+    )
+    monkeypatch.setattr(agents_module, "get_llm", lambda: object())
+    monkeypatch.setattr(
+        agents_module,
+        "create_agent",
+        lambda **_kwargs: FakeAgent("图片分析完成。", inputs),
+    )
+
+    result = agents_module.invoke_v2(
+        "请分析图片",
+        prompt_path,
+        skills_path,
+        attachment=attachment,
+    )
+
+    assert result["error"] is None
+    current_message = inputs[0]["messages"][-1]
+    assert current_message["role"] == "user"
+    content = current_message["content"]
+    assert [block["type"] for block in content] == ["text", "image_url"]
+    assert "请分析图片" in content[0]["text"]
+    assert "question.png" in content[0]["text"]
+    assert content[1] == {
+        "type": "image_url",
+        "image_url": {
+            "url": f"data:image/png;base64,{b64encode(PNG_BYTES).decode('ascii')}"
+        },
+    }
 
 
 def test_invoke_v2_loads_english_quest_and_passes_game_history(

@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 from PIL import Image
 
+import src.chat_submission as chat_submission_module
 from src.chat_submission import (
     MAX_ATTACHMENT_BYTES,
     MAX_TEXT_ATTACHMENT_CHARACTERS,
@@ -28,8 +29,31 @@ def _image_bytes(image_format: str) -> bytes:
     return buffer.getvalue()
 
 
+def _animated_image_bytes(image_format: str) -> bytes:
+    frames = [
+        Image.new("RGB", (4, 4), color=color)
+        for color in ("red", "green", "blue")
+    ]
+    buffer = BytesIO()
+    save_options = {"lossless": True} if image_format == "WEBP" else {}
+    frames[0].save(
+        buffer,
+        format=image_format,
+        save_all=True,
+        append_images=frames[1:],
+        duration=100,
+        loop=0,
+        **save_options,
+    )
+    return buffer.getvalue()
+
+
 JPEG_BYTES = _image_bytes("JPEG")
 PNG_BYTES = _image_bytes("PNG")
+GIF_BYTES = _image_bytes("GIF")
+WEBP_BYTES = _image_bytes("WEBP")
+ANIMATED_GIF_BYTES = _animated_image_bytes("GIF")
+ANIMATED_WEBP_BYTES = _animated_image_bytes("WEBP")
 
 
 @dataclass
@@ -198,7 +222,11 @@ def test_attachment_type_rejects_bytes_subclass_size_bypass() -> None:
         ("photo.jpg", "image/jpeg", JPEG_BYTES, "image/jpeg"),
         ("photo.jpg", "image/jpg", JPEG_BYTES, "image/jpeg"),
         ("photo.JPEG", "image/pjpeg", JPEG_BYTES, "image/jpeg"),
+        ("photo.jpe", "image/jpeg", JPEG_BYTES, "image/jpeg"),
+        ("photo.jfif", "image/jpeg", JPEG_BYTES, "image/jpeg"),
         ("diagram.png", "image/png", PNG_BYTES, "image/png"),
+        ("animation.gif", "image/gif", GIF_BYTES, "image/gif"),
+        ("diagram.webp", "image/webp", WEBP_BYTES, "image/webp"),
     ],
 )
 def test_image_magic_is_accepted_and_media_type_is_canonicalized(
@@ -219,10 +247,72 @@ def test_image_magic_is_accepted_and_media_type_is_canonicalized(
 
 
 @pytest.mark.parametrize(
+    ("name", "media_type", "payload"),
+    [
+        ("animation.gif", "image/gif", ANIMATED_GIF_BYTES),
+        ("animation.webp", "image/webp", ANIMATED_WEBP_BYTES),
+    ],
+)
+def test_animated_image_decodes_all_valid_frames(
+    name: str,
+    media_type: str,
+    payload: bytes,
+) -> None:
+    attachment = create_chat_attachment(
+        name=name,
+        media_type=media_type,
+        data=payload,
+    )
+
+    assert attachment.data == payload
+
+
+def test_animated_gif_rejects_a_truncated_later_frame() -> None:
+    truncated = ANIMATED_GIF_BYTES[:-10]
+    with Image.open(BytesIO(truncated)) as image:
+        image.load()
+
+    with pytest.raises(ChatSubmissionError, match="GIF 图片内容无效"):
+        create_chat_attachment(
+            name="animation.gif",
+            media_type="image/gif",
+            data=truncated,
+        )
+
+
+def test_animated_image_rejects_too_many_frames(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(chat_submission_module, "MAX_IMAGE_FRAMES", 2)
+
+    with pytest.raises(ChatSubmissionError, match="不能超过 2 帧"):
+        create_chat_attachment(
+            name="animation.gif",
+            media_type="image/gif",
+            data=ANIMATED_GIF_BYTES,
+        )
+
+
+def test_animated_image_rejects_excessive_sequence_pixels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(chat_submission_module, "MAX_IMAGE_SEQUENCE_PIXELS", 32)
+
+    with pytest.raises(ChatSubmissionError, match="动画图片总像素过大"):
+        create_chat_attachment(
+            name="animation.webp",
+            media_type="image/webp",
+            data=ANIMATED_WEBP_BYTES,
+        )
+
+
+@pytest.mark.parametrize(
     ("name", "declared_type", "payload", "error"),
     [
         ("photo.jpg", "image/jpeg", PNG_BYTES, "JPG 图片内容无效"),
         ("diagram.png", "image/png", JPEG_BYTES, "PNG 图片内容无效"),
+        ("animation.gif", "image/gif", PNG_BYTES, "GIF 图片内容无效"),
+        ("diagram.webp", "image/webp", PNG_BYTES, "WebP 图片内容无效"),
     ],
 )
 def test_image_rejects_invalid_magic(
@@ -253,6 +343,18 @@ def test_image_rejects_invalid_magic(
             "image/png",
             b"\x89PNG\r\n\x1a\nnot-an-image",
             "PNG 图片内容无效",
+        ),
+        (
+            "animation.gif",
+            "image/gif",
+            b"GIF89anot-an-image",
+            "GIF 图片内容无效",
+        ),
+        (
+            "diagram.webp",
+            "image/webp",
+            b"RIFF\x08\x00\x00\x00WEBPnot-an-image",
+            "WebP 图片内容无效",
         ),
     ],
 )
@@ -446,8 +548,8 @@ def test_text_model_message_wraps_attachment_as_untrusted_data(
     assert content.endswith("</student_attachment>")
 
 
-@pytest.mark.parametrize("provider", ["moonshot", "gemini"])
-def test_kimi_and_gemini_image_message_uses_an_ephemeral_data_url(
+@pytest.mark.parametrize("provider", ["deepseek", "moonshot", "gemini"])
+def test_image_capable_provider_uses_an_ephemeral_data_url(
     provider: str,
 ) -> None:
     attachment = create_chat_attachment(
@@ -473,7 +575,7 @@ def test_kimi_and_gemini_image_message_uses_an_ephemeral_data_url(
     assert b64decode(data_url.removeprefix(prefix)) == JPEG_BYTES
 
 
-def test_deepseek_explicitly_rejects_image_messages() -> None:
+def test_unknown_provider_rejects_image_messages_fail_closed() -> None:
     attachment = create_chat_attachment(
         name="question.png",
         media_type="image/png",
@@ -482,12 +584,12 @@ def test_deepseek_explicitly_rejects_image_messages() -> None:
 
     with pytest.raises(
         ChatSubmissionError,
-        match="当前 DeepSeek 模型不支持图片",
+        match="当前模型供应商不支持图片",
     ):
         model_message_content(
             "请分析图片",
             attachment,
-            provider="deepseek",
+            provider="unknown",
         )
 
 
@@ -624,9 +726,20 @@ def test_image_payload_redaction_handles_equivalent_base64_encodings(
     assert safe == "[图片数据已省略]"
 
 
-def test_text_attachment_inline_image_data_is_redacted_from_model_output() -> None:
-    encoded = b64encode(PNG_BYTES).decode("ascii")
-    data_url = f"data:image/png;base64,{encoded}"
+@pytest.mark.parametrize(
+    ("image_type", "payload"),
+    [
+        ("png", PNG_BYTES),
+        ("gif", GIF_BYTES),
+        ("webp", WEBP_BYTES),
+    ],
+)
+def test_text_attachment_inline_image_data_is_redacted_from_model_output(
+    image_type: str,
+    payload: bytes,
+) -> None:
+    encoded = b64encode(payload).decode("ascii")
+    data_url = f"data:image/{image_type};base64,{encoded}"
     attachment = create_chat_attachment(
         name="notes.md",
         media_type="text/markdown",

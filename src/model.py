@@ -282,7 +282,7 @@ def get_llm() -> BaseChatModel:
     if provider == "deepseek":
         temperature = _read_float(values, "MODEL_TEMPERATURE", 0.0, minimum=0.0)
         return ChatDeepSeek(
-            model="deepseek-v4-flash",
+            model="deepseek-v4-flash-vision-exp",
             temperature=temperature,
             timeout=timeout,
             max_retries=max_retries,

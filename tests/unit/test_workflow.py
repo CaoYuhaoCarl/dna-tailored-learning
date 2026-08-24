@@ -1075,7 +1075,7 @@ def test_v4_explicit_organize_request_passes_same_turn_attachment(
     assert organizer_attachments == [attachment]
 
 
-def test_v4_deepseek_image_preflight_stops_before_graph(
+def test_v4_deepseek_image_preflight_enters_graph_with_runtime_attachment(
     isolated_graph,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1085,6 +1085,12 @@ def test_v4_deepseek_image_preflight_stops_before_graph(
         data=PNG_BYTES + b"deepseek-preflight",
     )
     graph = Mock()
+    graph.get_state.return_value = SimpleNamespace(values={}, next=())
+    graph.invoke.return_value = {
+        "last_reply": "我已经读到图片中的题目。",
+        "waiting_for": "student_message",
+        "error": None,
+    }
     monkeypatch.setattr(workflow_module, "_V4_GRAPH", graph)
     monkeypatch.setattr(
         workflow_module,
@@ -1098,10 +1104,16 @@ def test_v4_deepseek_image_preflight_stops_before_graph(
         attachment=attachment,
     )
 
-    assert result["error"] is not None
-    assert "切换为 Kimi 或 Gemini" in result["error"]
-    graph.get_state.assert_not_called()
-    graph.invoke.assert_not_called()
+    assert result["error"] is None
+    assert result["text"] == "我已经读到图片中的题目。"
+    graph.get_state.assert_called_once_with(
+        {"configurable": {"thread_id": "thread-deepseek-image"}}
+    )
+    graph.invoke.assert_called_once()
+    initial_state = graph.invoke.call_args.args[0]
+    assert initial_state["current_message"] == "请帮我看看这张题"
+    runtime_context = graph.invoke.call_args.kwargs["context"]
+    assert runtime_context.attachment is attachment
 
 
 def test_v4_only_explicit_organize_request_uses_write_agent(
