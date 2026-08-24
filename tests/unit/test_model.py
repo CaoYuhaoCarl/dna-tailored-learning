@@ -1,11 +1,22 @@
+from base64 import b64decode
+import json
 import os
 from pathlib import Path
 from unittest.mock import Mock
 
+import httpx
 import pytest
 from dotenv import dotenv_values
+from langchain_deepseek import ChatDeepSeek as RealChatDeepSeek
 
 import src.model as model_module
+from src.chat_submission import create_chat_attachment, model_message_content
+
+
+_TINY_PNG = b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8A"
+    "AQUBAScY42YAAAAASUVORK5CYII="
+)
 
 
 _MODEL_ENVIRONMENT_VARIABLES = (
@@ -83,13 +94,78 @@ def test_get_llm_defaults_to_deepseek(monkeypatch: pytest.MonkeyPatch) -> None:
     model_module.get_llm()
 
     constructor.assert_called_once_with(
-        model="deepseek-v4-flash",
+        model="deepseek-v4-flash-vision-exp",
         temperature=0.0,
         timeout=45.0,
         max_retries=2,
         api_key="deepseek-key",
         extra_body={"thinking": {"type": "disabled"}},
     )
+
+
+def test_deepseek_vision_content_reaches_openai_compatible_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-key")
+    captured: dict = {}
+
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "deepseek-v4-flash-vision-exp",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "图片分析完成。",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                },
+            },
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handle_request)) as client:
+        monkeypatch.setattr(
+            model_module,
+            "ChatDeepSeek",
+            lambda **kwargs: RealChatDeepSeek(**kwargs, http_client=client),
+        )
+        llm = model_module.get_llm()
+        attachment = create_chat_attachment(
+            name="question.png",
+            media_type="image/png",
+            data=_TINY_PNG,
+        )
+        content = model_message_content(
+            "请分析图片",
+            attachment,
+            provider="deepseek",
+        )
+        response = llm.invoke(
+            [
+                {
+                    "role": "user",
+                    "content": content,
+                }
+            ]
+        )
+
+    assert response.content == "图片分析完成。"
+    assert captured["model"] == "deepseek-v4-flash-vision-exp"
+    assert captured["thinking"] == {"type": "disabled"}
+    assert captured["messages"] == [{"role": "user", "content": content}]
 
 
 def test_get_llm_prefers_running_process_environment_over_env_file(
@@ -168,7 +244,11 @@ def test_get_llm_selects_gemini_and_only_requires_its_key(
 @pytest.mark.parametrize(
     ("provider", "key_name", "expected_name"),
     [
-        ("deepseek", "DEEPSEEK_API_KEY", "deepseek-v4-flash"),
+        (
+            "deepseek",
+            "DEEPSEEK_API_KEY",
+            "deepseek-v4-flash-vision-exp",
+        ),
         ("moonshot", "MOONSHOT_API_KEY", "kimi-k2.6"),
         ("gemini", "GEMINI_API_KEY", "gemini-3.6-flash"),
     ],
@@ -201,7 +281,7 @@ def test_get_llm_uses_shared_timeout_and_retry_settings(
     model_module.get_llm()
 
     constructor.assert_called_once_with(
-        model="deepseek-v4-flash",
+        model="deepseek-v4-flash-vision-exp",
         temperature=0.2,
         timeout=30.0,
         max_retries=3,

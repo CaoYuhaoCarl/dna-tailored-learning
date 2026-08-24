@@ -8,11 +8,12 @@ from io import BytesIO
 import json
 from pathlib import Path
 import re
+from struct import error as StructError
 from typing import TYPE_CHECKING, Any, Protocol
 import unicodedata
 import warnings
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageSequence, UnidentifiedImageError
 
 if TYPE_CHECKING:
     from src.personalization import AgentPersonalization
@@ -21,23 +22,62 @@ if TYPE_CHECKING:
 MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
 MAX_TEXT_ATTACHMENT_CHARACTERS = 64_000
 MAX_IMAGE_PIXELS = 16_000_000
-ACCEPTED_FILE_TYPES = ("jpg", "jpeg", "png", "txt", "md")
-_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
+MAX_IMAGE_SEQUENCE_PIXELS = 64_000_000
+MAX_IMAGE_FRAMES = 1_000
+ACCEPTED_FILE_TYPES = (
+    "jpg",
+    "jpeg",
+    "jpe",
+    "jfif",
+    "png",
+    "gif",
+    "webp",
+    "txt",
+    "md",
+)
+_JPEG_EXTENSIONS = {".jpg", ".jpeg", ".jpe", ".jfif"}
+_IMAGE_EXTENSIONS = _JPEG_EXTENSIONS | {".png", ".gif", ".webp"}
 _TEXT_EXTENSIONS = {".txt", ".md"}
 _GENERIC_MEDIA_TYPES = {"", "application/octet-stream"}
 _MEDIA_TYPES_BY_EXTENSION = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
+    ".jpe": "image/jpeg",
+    ".jfif": "image/jpeg",
     ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
     ".txt": "text/plain",
     ".md": "text/markdown",
 }
 _DECLARED_MEDIA_TYPES = {
     ".jpg": {"image/jpeg", "image/jpg", "image/pjpeg"},
     ".jpeg": {"image/jpeg", "image/jpg", "image/pjpeg"},
+    ".jpe": {"image/jpeg", "image/jpg", "image/pjpeg"},
+    ".jfif": {"image/jpeg", "image/jpg", "image/pjpeg"},
     ".png": {"image/png"},
+    ".gif": {"image/gif"},
+    ".webp": {"image/webp"},
     ".txt": {"text/plain"},
     ".md": {"text/markdown", "text/plain", "text/x-markdown"},
+}
+_IMAGE_FORMATS_BY_EXTENSION = {
+    ".jpg": "JPEG",
+    ".jpeg": "JPEG",
+    ".jpe": "JPEG",
+    ".jfif": "JPEG",
+    ".png": "PNG",
+    ".gif": "GIF",
+    ".webp": "WEBP",
+}
+_IMAGE_LABELS_BY_EXTENSION = {
+    ".jpg": "JPG",
+    ".jpeg": "JPG",
+    ".jpe": "JPG",
+    ".jfif": "JPG",
+    ".png": "PNG",
+    ".gif": "GIF",
+    ".webp": "WebP",
 }
 _ATTACHMENT_ONLY_PROMPT = "请阅读我上传的附件并帮助我理解。"
 _UNTRUSTED_DATA_NOTICE = (
@@ -263,7 +303,7 @@ _MISTAKE_READ_AND_WRITE_FILE_PATTERN = re.compile(
     flags=re.IGNORECASE,
 )
 _IMAGE_DATA_URL_PATTERN = re.compile(
-    r"data:image/(?:jpeg|jpg|png)(?:;[^,\r\n]*)?;\s*base64\s*,\s*"
+    r"data:image/(?:jpeg|jpg|png|gif|webp)(?:;[^,\r\n]*)?;\s*base64\s*,\s*"
     r"(?P<payload>(?:[A-Za-z0-9+/_=-][ \t\r\n\u200b\u200c\u200d\ufeff]*)+)",
     flags=re.IGNORECASE,
 )
@@ -313,7 +353,9 @@ class ChatAttachment:
             raise ChatSubmissionError("附件名称必须是不含路径的安全文件名。")
         extension = Path(safe_name).suffix.casefold()
         if extension not in _IMAGE_EXTENSIONS | _TEXT_EXTENSIONS:
-            raise ChatSubmissionError("仅支持 JPG、PNG、TXT 和 MD 文件。")
+            raise ChatSubmissionError(
+                "仅支持 JPG、PNG、GIF、WebP、TXT 和 MD 文件。"
+            )
         if self.media_type != _MEDIA_TYPES_BY_EXTENSION[extension]:
             raise ChatSubmissionError("附件扩展名和文件类型不一致，请重新选择文件。")
         if type(self.data) is not bytes:
@@ -416,12 +458,19 @@ def _validate_declared_media_type(
 
 
 def _validate_image(extension: str, data: bytes) -> None:
-    if extension in {".jpg", ".jpeg"} and not data.startswith(b"\xff\xd8\xff"):
+    if extension in _JPEG_EXTENSIONS and not data.startswith(b"\xff\xd8\xff"):
         raise ChatSubmissionError("JPG 图片内容无效或已经损坏。")
     if extension == ".png" and not data.startswith(b"\x89PNG\r\n\x1a\n"):
         raise ChatSubmissionError("PNG 图片内容无效或已经损坏。")
+    if extension == ".gif" and not data.startswith((b"GIF87a", b"GIF89a")):
+        raise ChatSubmissionError("GIF 图片内容无效或已经损坏。")
+    if extension == ".webp" and not (
+        len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP"
+    ):
+        raise ChatSubmissionError("WebP 图片内容无效或已经损坏。")
 
-    expected_format = "JPEG" if extension in {".jpg", ".jpeg"} else "PNG"
+    expected_format = _IMAGE_FORMATS_BY_EXTENSION[extension]
+    image_type = _IMAGE_LABELS_BY_EXTENSION[extension]
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
@@ -430,22 +479,45 @@ def _validate_image(extension: str, data: bytes) -> None:
                     raise ChatSubmissionError(
                         "图片扩展名和实际编码不一致，请重新选择文件。"
                     )
-                width, height = image.size
-                if width <= 0 or height <= 0 or width * height > MAX_IMAGE_PIXELS:
-                    raise ChatSubmissionError(
-                        "图片尺寸过大，请缩小到 1600 万像素以内。"
-                    )
-                image.load()
+                sequence_pixels = 0
+                for frame_count, frame in enumerate(
+                    ImageSequence.Iterator(image),
+                    start=1,
+                ):
+                    if frame_count > MAX_IMAGE_FRAMES:
+                        raise ChatSubmissionError(
+                            f"动画图片不能超过 {MAX_IMAGE_FRAMES} 帧，"
+                            "请减少帧数后重试。"
+                        )
+                    width, height = frame.size
+                    frame_pixels = width * height
+                    if (
+                        width <= 0
+                        or height <= 0
+                        or frame_pixels > MAX_IMAGE_PIXELS
+                    ):
+                        raise ChatSubmissionError(
+                            "图片尺寸过大，请缩小到 1600 万像素以内。"
+                        )
+                    sequence_pixels += frame_pixels
+                    if sequence_pixels > MAX_IMAGE_SEQUENCE_PIXELS:
+                        raise ChatSubmissionError(
+                            "动画图片总像素过大，请减少帧数或分辨率后重试。"
+                        )
+                    frame.load()
     except ChatSubmissionError:
         raise
     except (
         Image.DecompressionBombError,
         Image.DecompressionBombWarning,
+        EOFError,
+        IndexError,
         OSError,
+        StructError,
+        SyntaxError,
         UnidentifiedImageError,
         ValueError,
     ) as exc:
-        image_type = "JPG" if expected_format == "JPEG" else "PNG"
         raise ChatSubmissionError(
             f"{image_type} 图片内容无效或已经损坏。"
         ) from exc
@@ -462,7 +534,9 @@ def create_chat_attachment(
     safe_name = _safe_filename(name)
     extension = Path(safe_name).suffix.casefold()
     if extension not in _IMAGE_EXTENSIONS | _TEXT_EXTENSIONS:
-        raise ChatSubmissionError("仅支持 JPG、PNG、TXT 和 MD 文件。")
+        raise ChatSubmissionError(
+            "仅支持 JPG、PNG、GIF、WebP、TXT 和 MD 文件。"
+        )
     if not isinstance(data, bytes):
         raise ChatSubmissionError("无法读取附件，请重新选择文件。")
     if not data:
@@ -581,11 +655,11 @@ def ensure_attachment_supported(
     if (
         attachment is not None
         and attachment.is_image
-        and provider.casefold() not in {"moonshot", "gemini"}
+        and provider.casefold() not in {"deepseek", "moonshot", "gemini"}
     ):
         raise ChatSubmissionError(
-            "当前 DeepSeek 模型不支持图片。"
-            "请到首页切换为 Kimi 或 Gemini，重新选择图片后发送。"
+            "当前模型供应商不支持图片。"
+            "请到首页切换为 DeepSeek、Kimi 或 Gemini，重新选择图片后发送。"
         )
 
 
