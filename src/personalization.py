@@ -470,6 +470,10 @@ def _read_utf8_file(path: Path, *, student_root: Path) -> str:
             f"缺少 {_display_path(path)}，请从课程模板恢复后重试。"
         ) from exc
     except OSError as exc:
+        if path.is_dir():
+            raise PersonalizationError(
+                f"{_display_path(path)} 必须是普通 Markdown 文件。"
+            ) from exc
         raise PersonalizationError(
             f"无法打开 {_display_path(path)}，请检查文件类型和权限。"
         ) from exc
@@ -491,7 +495,11 @@ def _read_utf8_file(path: Path, *, student_root: Path) -> str:
                 f"{_display_path(path)} 超过 32 KiB，请缩短后重试。"
             )
         try:
-            return payload.decode("utf-8")
+            return (
+                payload.decode("utf-8")
+                .replace("\r\n", "\n")
+                .replace("\r", "\n")
+            )
         except UnicodeDecodeError as exc:
             raise PersonalizationError(
                 f"{_display_path(path)} 必须使用 UTF-8 编码。"

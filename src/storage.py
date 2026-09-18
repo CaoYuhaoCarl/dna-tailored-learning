@@ -60,7 +60,12 @@ def load_markdown(
             f"文件过大，只能读取不超过 {max_bytes // 1024} KB 的 Markdown。"
         )
     try:
-        content = payload.decode("utf-8").strip()
+        content = (
+            payload.decode("utf-8")
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+            .strip()
+        )
     except UnicodeDecodeError as exc:
         raise StorageError("文件不是有效的 UTF-8 Markdown。") from exc
     if not content:

@@ -2,6 +2,7 @@
 
 import json
 import re
+import threading
 from collections.abc import Sequence
 from datetime import date
 from hashlib import sha256
@@ -97,6 +98,7 @@ _SUBJECT_DIRECTORIES = {
 }
 
 _MISTAKE_SCHEMA_VERSION = 1
+_MISTAKE_SAVE_LOCK = threading.RLock()
 
 
 class ConversationHistoryError(ValueError):
@@ -545,21 +547,22 @@ def _create_save_mistake_tool(
             next_reminder=next_reminder,
         )
 
-        try:
-            saved_path = save_markdown(
-                subject_path,
-                filename,
-                markdown,
-                allowed_root=allowed_root,
-            )
-        except FileAlreadyExistsError:
-            existing_path = subject_path / filename
-            return (
-                "这道错题已经保存，无需重复写入："
-                f"{_display_output_path(existing_path)}"
-            )
-        except StorageError as exc:
-            return f"保存失败：{exc}"
+        with _MISTAKE_SAVE_LOCK:
+            try:
+                saved_path = save_markdown(
+                    subject_path,
+                    filename,
+                    markdown,
+                    allowed_root=allowed_root,
+                )
+            except FileAlreadyExistsError:
+                existing_path = subject_path / filename
+                return (
+                    "这道错题已经保存，无需重复写入："
+                    f"{_display_output_path(existing_path)}"
+                )
+            except StorageError as exc:
+                return f"保存失败：{exc}"
 
         return f"保存成功：{_display_output_path(saved_path)}"
 

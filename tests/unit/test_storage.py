@@ -27,7 +27,7 @@ def test_load_markdown_reads_absolute_utf8_file_inside_allowed_root(
     mistakes_path = tmp_path / "student" / "mistakes"
     mistakes_path.mkdir(parents=True)
     source_path = mistakes_path / "english.md"
-    source_path.write_text("错题1\n原题：测试题\n", encoding="utf-8")
+    source_path.write_bytes("错题1\r\n原题：测试题\r\n".encode("utf-8"))
 
     content = load_markdown(source_path, allowed_root=mistakes_path)
 

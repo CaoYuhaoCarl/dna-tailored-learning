@@ -76,6 +76,7 @@ def test_default_skills_use_standard_metadata_and_steps() -> None:
     assert [skill.name for skill in skills] == [
         "english-quest",
         "sorting-out-mistakes",
+        "vocab-quest",
     ]
     skills_by_name = {skill.name: skill for skill in skills}
 
@@ -101,6 +102,12 @@ def test_default_skills_use_standard_metadata_and_steps() -> None:
     assert "save_mistake" in mistakes.instructions
     assert "schema_version" in mistakes.instructions
     assert "next_review_at" in mistakes.instructions
+
+    vocab = read_skill(skills_by_name["vocab-quest"].path)
+    assert "背单词" in vocab.metadata.description
+    assert "六关" in vocab.instructions
+    assert "每轮只能有一个" in vocab.instructions
+    assert "任务报告" in vocab.instructions
 
 
 def test_read_skill_requires_frontmatter(tmp_path: Path) -> None:

@@ -157,6 +157,20 @@ def test_first_initialization_atomically_creates_private_files(tmp_path: Path) -
     assert not list(paths["student_root"].glob(".*.tmp"))
 
 
+def test_initialization_normalizes_windows_newlines(tmp_path: Path) -> None:
+    paths = _personalization_tree(tmp_path)
+    paths["soul_template"].write_bytes(
+        "# Agent 个性\r\n\r\n保持耐心。\r\n".encode("utf-8")
+    )
+
+    snapshot = _initialize(paths)
+
+    assert snapshot.soul_markdown == "# Agent 个性\n\n保持耐心。"
+    assert paths["soul"].read_bytes() == "# Agent 个性\n\n保持耐心。\n".encode(
+        "utf-8"
+    )
+
+
 def test_initialization_never_overwrites_existing_files(tmp_path: Path) -> None:
     paths = _personalization_tree(tmp_path)
     paths["soul"].write_text("# 我的个性\n", encoding="utf-8")
@@ -212,6 +226,13 @@ def test_invalid_existing_file_is_reported_without_template_overwrite(
         ("OWNER.md", b"\xff\xfe", "UTF-8"),
         ("OWNER.md", b"x" * (MAX_PERSONALIZATION_BYTES + 1), "32 KiB"),
     ],
+    ids=(
+        "empty-soul",
+        "non-utf8-soul",
+        "oversized-soul",
+        "non-utf8-owner",
+        "oversized-owner",
+    ),
 )
 def test_load_rejects_empty_non_utf8_and_oversized_files(
     tmp_path: Path,
